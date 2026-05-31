@@ -259,13 +259,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Watch only fields that should trigger a full rebuild.
-    // Messages/loading/conversationId trigger rebuild; streaming/token/toolStatus do NOT.
+    // Watch fields that actually drive UI updates.
+    // messages/loading/agentState trigger rebuild; streaming/token do NOT.
     final messages = ref.watch(chatProvider.select((s) => s.messages));
     final loading = ref.watch(chatProvider.select((s) => s.loading));
     final conversationId = ref.watch(chatProvider.select((s) => s.conversationId));
-    final error = ref.watch(chatProvider.select((s) => s.error));
-    // Snapshot for everything else — no rebuild on these field changes
+    final agentState = ref.watch(chatProvider.select((s) => s.agentState));
+    // Snapshot for everything else
     final s = ref.read(chatProvider);
     final theme = ref.watch(themeProvider);
     final c = ThemeColors(theme);
@@ -291,9 +291,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               AgentAvatar(
-                key: ValueKey(s.agentState),
+                key: ValueKey(agentState),
                 size: 32,
-                state: s.agentState,
+                state: agentState,
               ),
               const SizedBox(width: 10),
               Column(
