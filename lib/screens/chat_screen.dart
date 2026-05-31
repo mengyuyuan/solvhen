@@ -259,14 +259,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final s = ref.watch(chatProvider);
+    // Watch only fields that should trigger a full rebuild.
+    // Messages/loading/conversationId trigger rebuild; streaming/token/toolStatus do NOT.
+    final messages = ref.watch(chatProvider.select((s) => s.messages));
+    final loading = ref.watch(chatProvider.select((s) => s.loading));
+    final conversationId = ref.watch(chatProvider.select((s) => s.conversationId));
+    final error = ref.watch(chatProvider.select((s) => s.error));
+    // Snapshot for everything else — no rebuild on these field changes
+    final s = ref.read(chatProvider);
     final theme = ref.watch(themeProvider);
     final c = ThemeColors(theme);
 
     // Clear typewriter indices when conversation changes
-    if (s.conversationId != _lastConvId) {
+    if (conversationId != _lastConvId) {
       _typewriterIdx.clear();
-      _lastConvId = s.conversationId;
+      _lastConvId = conversationId;
     }
 
     return Scaffold(
