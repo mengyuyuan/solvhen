@@ -671,7 +671,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // ═══════════════════════════════════════
 
   Widget _buildInput(ThemeColors c) {
-    final chatState = ref.watch(chatProvider);
+    final loading = ref.watch(chatProvider.select((s) => s.loading));
     return Container(
       padding: EdgeInsets.only(left: 16, right: 8, top: 10, bottom: MediaQuery.of(context).padding.bottom + 10),
       decoration: BoxDecoration(
@@ -711,7 +711,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         const SizedBox(width: 4),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 200),
-          child: chatState.loading
+          child: loading
               ? IconButton(
                   key: const ValueKey('stop'),
                   icon: const Icon(Icons.stop_rounded, size: 24),
