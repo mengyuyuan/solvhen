@@ -259,13 +259,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Watch fields that actually drive UI updates.
-    // messages/loading/agentState trigger rebuild; streaming/token do NOT.
+    // Watch only fields that should trigger a full rebuild.
+    // Messages/loading/conversationId trigger rebuild; streaming/token/toolStatus do NOT.
     final messages = ref.watch(chatProvider.select((s) => s.messages));
     final loading = ref.watch(chatProvider.select((s) => s.loading));
     final conversationId = ref.watch(chatProvider.select((s) => s.conversationId));
-    final agentState = ref.watch(chatProvider.select((s) => s.agentState));
-    // Snapshot for everything else
+    final error = ref.watch(chatProvider.select((s) => s.error));
+    // Snapshot for everything else — no rebuild on these field changes
     final s = ref.read(chatProvider);
     final theme = ref.watch(themeProvider);
     final c = ThemeColors(theme);
@@ -291,9 +291,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               AgentAvatar(
-                key: ValueKey(agentState),
+                key: ValueKey(s.agentState),
                 size: 32,
-                state: agentState,
+                state: s.agentState,
               ),
               const SizedBox(width: 10),
               Column(
@@ -671,7 +671,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // ═══════════════════════════════════════
 
   Widget _buildInput(ThemeColors c) {
-    final loading = ref.watch(chatProvider.select((s) => s.loading));
+    final chatState = ref.watch(chatProvider);
     return Container(
       padding: EdgeInsets.only(left: 16, right: 8, top: 10, bottom: MediaQuery.of(context).padding.bottom + 10),
       decoration: BoxDecoration(
@@ -711,7 +711,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         const SizedBox(width: 4),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 200),
-          child: loading
+          child: chatState.loading
               ? IconButton(
                   key: const ValueKey('stop'),
                   icon: const Icon(Icons.stop_rounded, size: 24),
