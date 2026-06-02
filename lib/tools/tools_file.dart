@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'tool_registry.dart';
+import 'tool_utils.dart';
 
 void registerFileTools() {
   final registry = ToolRegistry();
@@ -75,8 +76,8 @@ void registerFileTools() {
           final content = await file.readAsString();
           final allLines = const LineSplitter().convert(content);
           final totalLines = allLines.length;
-          final offset = ((args['offset'] as int?) ?? 1).clamp(1, totalLines);
-          final limit = ((args['limit'] as int?) ?? 200).clamp(1, 500);
+          final offset = clampInt(parseArgInt(args['offset'], 1), 1, totalLines);
+          final limit = clampInt(parseArgInt(args['limit'], 200), 1, 500);
 
           final end = (offset + limit - 1).clamp(0, totalLines);
           final page = allLines.sublist(offset - 1, end);

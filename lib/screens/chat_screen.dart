@@ -17,6 +17,7 @@ import 'agent_avatar.dart';
 import 'thinking_overlay.dart';
 import 'ui_controller.dart';
 import 'webview_canvas.dart';
+import '../models/message.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -325,7 +326,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           Expanded(
             child: Stack(
               children: [
-                const IgnorePointer(ignoring: false, child: WebViewCanvas()),
+                const IgnorePointer(child: WebViewCanvas()),
                 _buildMessagesColumn(s, c),
               ],
             ),
@@ -734,7 +735,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   // ═══════════════════════════════════════
   /// If typewriter mode is on, reveals assistant messages character by character.
-  String _typewriterText(dynamic m, int idx) {
+  String _typewriterText(Message m, int idx) {
     final uic = UIController();
     if (!uic.typewriterMode || m.role == 'user' || m.role == 'tool') {
       return _cleanDisplay(m.content);
@@ -744,10 +745,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final target = m.content.length;
     final cur = _typewriterIdx[idx]!;
     if (cur < target) {
+      // Advance cursor AFTER build frame, never mutate state during build.
+      // This prevents frame-jitter from Flutter's multi-pass layout calling build().
       final next = (cur + speed).clamp(0, target).toInt();
-      _typewriterIdx[idx] = next;
-      Future.delayed(const Duration(milliseconds: 30), () {
-        if (mounted && _typewriterIdx[idx]! < target) setState(() {});
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _typewriterIdx[idx] = next;
+        if (next < target) {
+          Future.delayed(const Duration(milliseconds: 30), () {
+            if (mounted) setState(() {});
+          }).catchError((_) {});
+        }
       });
       return _cleanDisplay(m.content.substring(0, next));
     }

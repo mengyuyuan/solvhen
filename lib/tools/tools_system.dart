@@ -5,6 +5,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 import 'tool_registry.dart';
+import 'tool_utils.dart';
 import 'native_bridge.dart';
 
 void registerSystemTools() {
@@ -61,7 +62,7 @@ void registerSystemTools() {
       },
     },
     handler: (args) async =>
-        jsonEncode(await NativeBridge.setVolume((args['level'] as int).clamp(0, 100))),
+        jsonEncode(await NativeBridge.setVolume(clampInt(parseArgInt(args['level'], 50), 0, 100))),
   ));
 
   registry.register(ToolEntry(
@@ -88,7 +89,7 @@ void registerSystemTools() {
       },
     },
     handler: (args) async =>
-        jsonEncode(await NativeBridge.setBrightness((args['level'] as int).clamp(0, 255))),
+        jsonEncode(await NativeBridge.setBrightness(clampInt(parseArgInt(args['level'], 128), 0, 255))),
   ));
 
   registry.register(ToolEntry(

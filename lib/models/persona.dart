@@ -19,7 +19,9 @@ class Persona {
     if (value is String) {
       try {
         return DateTime.parse(value);
-      } catch (_) {}
+      } catch (_) {
+        return DateTime.fromMillisecondsSinceEpoch(0);
+      }
     }
     return DateTime.now();
   }

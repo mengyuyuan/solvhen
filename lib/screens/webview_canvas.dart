@@ -125,13 +125,29 @@ class WebViewCanvasController {
 
   Future<void> _apply(_HtmlUpdate update) async {
     final ctrl = _webCtrl!;
+    final bytes = utf8.encode(update.html);
+    final b64 = base64Encode(bytes);
     if (update.mode == 'replace') {
-      final html = _wrapPage(update.html);
-      await ctrl.loadHtmlString(html);
+      // Use JS injection to avoid loadHtmlString flash on Android.
+      // Clear #c and inject new content without navigating.
+      final escaped = update.html
+          .replaceAll(r'\', r'\\')
+          .replaceAll(r'`', r'\`')
+          .replaceAll(r'$', r'\$');
+      try {
+        await ctrl.runJavaScript('''
+(function(){
+  var c=document.getElementById('c')||document.body;
+  c.innerHTML=`$escaped`;
+})();
+''');
+      } catch (_) {
+        // Fallback: if JS injection fails, use loadHtmlString
+        final html = _wrapPage(update.html);
+        await ctrl.loadHtmlString(html);
+      }
     } else {
       // Append: use base64 to avoid template-literal escaping pitfalls
-      final bytes = utf8.encode(update.html);
-      final b64 = base64Encode(bytes);
       await ctrl.runJavaScript('''
 (function(){
   var d=document.createElement('div');

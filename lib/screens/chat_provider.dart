@@ -261,7 +261,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       var finalText = result.content.isNotEmpty ? result.content : '';
       finalText = ToolExecutor.stripToolCallsFromContent(finalText);
-      finalText = finalText.replaceAll(RegExp(r'[（(]\\s*调用\\s+\\w+[^）)]*[）)]'), '').trim();
+      // stripToolCallsFromContent already handles Chinese/English call patterns
+      finalText = finalText.trim();
 
       // If model produced no text after tool execution, supply a minimal ack
       // so the user doesn't see silent nothing.
@@ -292,11 +293,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
       );
     } catch (e) {
       try {
-        final prompt = await PromptBuilder.build(historyBefore, text,
+        final prompt = await PromptBuilder.build(nextHistory, text,
             toolNames: ToolRegistry().names, conversationId: convId);
         _setState(AgentState.speaking);
         final reply = await _api.chatStream(
-          systemPrompt: prompt, history: historyBefore, userMessage: text,
+          systemPrompt: prompt, history: nextHistory, userMessage: text,
           onChunk: (c) {
             final b = StringBuffer(state.streaming);
             b.write(c);

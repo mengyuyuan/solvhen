@@ -8,6 +8,7 @@ import 'command_registry.dart';
 import '../theme/theme_provider.dart';
 import '../tools/native_bridge.dart';
 import '../tools/tools_system.dart';
+import '../tools/tool_utils.dart';
 import '../services/database_service.dart';
 import '../screens/chat_provider.dart';
 
@@ -75,7 +76,7 @@ class CommandExecutor {
           final v = await NativeBridge.getVolume();
           return '🔊 音量: ${v['level']}/${v['max']}';
         }
-        final lvl = int.tryParse(args[0]) ?? 50;
+        final lvl = clampInt(int.tryParse(args[0]) ?? 50, 0, 100);
         await NativeBridge.setVolume(lvl);
         final v = await NativeBridge.getVolume();
         return '🔊 音量已设为 ${v['level']}/${v['max']}';
@@ -85,7 +86,7 @@ class CommandExecutor {
           final b = await NativeBridge.getBrightness();
           return '💡 亮度: ${b['level']}/${b['max']}';
         }
-        final lvl = int.tryParse(args[0]) ?? 128;
+        final lvl = clampInt(int.tryParse(args[0]) ?? 128, 0, 255);
         await NativeBridge.setBrightness(lvl);
         final b = await NativeBridge.getBrightness();
         return '💡 亮度已设为 ${b['level']}/${b['max']}';

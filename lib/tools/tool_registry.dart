@@ -41,8 +41,14 @@ class ToolRegistry {
     if (entry == null) return jsonEncode({'error': 'Unknown tool: $name'});
     try {
       return await entry.handler(args);
-    } catch (e) {
-      return jsonEncode({'error': 'Tool execution failed: $e'});
+    } catch (e, st) {
+      return jsonEncode({
+        'error': 'Tool execution failed',
+        'tool': name,
+        'detail': e.toString().length > 200
+            ? '${e.toString().substring(0, 200)}...'
+            : e.toString(),
+      });
     }
   }
 

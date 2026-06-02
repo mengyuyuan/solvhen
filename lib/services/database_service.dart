@@ -51,7 +51,8 @@ class DB {
   }
 
   static Future<void> _create(Database db, int v) async {
-    // ── Conversations ──
+    try {
+      // ── Conversations ──
     await db.execute('''
       CREATE TABLE conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,6 +155,9 @@ class DB {
     await db.insert('conversations', {
       'title': '新对话', 'created_at': now, 'updated_at': now,
     });
+    } catch (e) {
+      throw Exception('数据库建表失败，可能是磁盘已满或权限不足: $e');
+    }
   }
 
   static Future<void> _upgrade(Database db, int oldV, int newV) async {

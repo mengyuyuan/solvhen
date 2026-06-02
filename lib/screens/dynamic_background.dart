@@ -41,8 +41,7 @@ class _DynamicBackgroundState extends State<DynamicBackground>
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 120))
-      ..repeat();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 120));
   }
 
   @override
@@ -58,8 +57,12 @@ class _DynamicBackgroundState extends State<DynamicBackground>
     final density = mood.particleDensity ?? 0.0;
 
     if ((effects == null || effects.isEmpty) && density <= 0.005) {
+      _ctrl.stop();
       return const SizedBox.shrink();
     }
+
+    // Start animation loop when effects are active (idempotent)
+    if (!_ctrl.isAnimating) _ctrl.repeat();
 
     return IgnorePointer(
       child: AnimatedBuilder(

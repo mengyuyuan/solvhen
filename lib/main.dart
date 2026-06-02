@@ -16,16 +16,15 @@ import 'tools/tools_delegate.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  registerThemeTools();
-  registerSystemTools();
-  registerFileTools();
-  registerCodeTool();
-  registerWebTools();
-  registerWebExtractTool();
-  registerHistoryTool();
-  registerMemoryTools();
-  registerUITools();
-  registerDelegateTools();
+  final regFns = [
+    registerThemeTools, registerSystemTools, registerFileTools,
+    registerCodeTool, registerWebTools, registerWebExtractTool,
+    registerHistoryTool, registerMemoryTools, registerUITools,
+    registerDelegateTools,
+  ];
+  for (final fn in regFns) {
+    try { fn(); } catch (_) { /* one tool broken shouldn't kill the app */ }
+  }
   runApp(const ProviderScope(child: CompanionApp()));
 }
 

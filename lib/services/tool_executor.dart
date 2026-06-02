@@ -101,7 +101,7 @@ class ToolExecutor {
   static final _sParamRe = RegExp(r'<parameter\b[^>]*>.*?</parameter>', dotAll: true);
   static final _sTagRe = RegExp(r'</?(?:invoke|parameter|tool_calls)\b[^>]*>', dotAll: true);
   static final _sCallCnRe = RegExp(r'[（(]\s*调用[\s\S]*?[）)]');
-  static final _sCallEnRe = RegExp(r"(?:I(?:'ll|\s+will)\s+)?(?:call|invoke|use)\s+\w+\s*(?:tool|function)?[.!，。]?");
+  static final _sCallEnRe = RegExp(r"(?:I(?:'ll|'m|'ve|\s+(?:will|can|should|must))\s+)?(?:call(?:ing|ed)?|invok(?:ing|ed)?|us(?:ing|ed)|let\s+me\s+call)\s+(?:the\s+)?\w+\s*(?:tool|function)?[.!，。]?");
   static final _sHtmlRe = RegExp(r'```html?\s*\n[\s\S]*?```', dotAll: true);
   static final _sCssRe = RegExp(r'```css\s*\n[\s\S]*?```', dotAll: true);
   static final _sBlankRe = RegExp(r'\n{3,}');

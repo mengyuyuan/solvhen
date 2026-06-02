@@ -64,10 +64,12 @@ class ThemeNotifier extends ChangeNotifier {
   }
 
   void _persist() {
-    DB.setConfig('theme_accent', _state.accentHex)
-        .catchError((_) {});
-    DB.setConfig('theme_brightness', _state.brightness == Brightness.dark ? 'dark' : 'light')
-        .catchError((_) {});
+    DB.setConfig('theme_accent', _state.accentHex).catchError((e) {
+      debugPrint('Theme persist accent failed: $e');
+    });
+    DB.setConfig('theme_brightness', _state.brightness == Brightness.dark ? 'dark' : 'light').catchError((e) {
+      debugPrint('Theme persist brightness failed: $e');
+    });
   }
 
   static String? _resolve(String s) {

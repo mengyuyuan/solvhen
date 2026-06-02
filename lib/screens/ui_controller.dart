@@ -235,7 +235,9 @@ class UIController extends ChangeNotifier {
     if (_moodDirty) {
       _saveMoodToDB();
     }
-    _mood = _mood.merge(mood);
+    final merged = _mood.merge(mood);
+    if (identical(merged, _mood)) return; // nothing changed
+    _mood = merged;
     notifyListeners();
     _saveMoodToDB();
   }

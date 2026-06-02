@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'tool_registry.dart';
+import 'tool_utils.dart';
 import '../screens/ui_controller.dart';
 import '../screens/webview_canvas.dart';
 import 'package:flutter/material.dart';
@@ -51,14 +52,14 @@ curve: easeIn | easeOut | easeInOut | linear | bounce
       },
     },
     handler: (args) async {
-      final target = args['target'] as String;
-      final kfs = (args['keyframes'] as List<dynamic>).map((k) {
+      final target = parseArgString(args['target']);
+      final kfs = parseArgList(args['keyframes']).map((k) {
         final m = k as Map<String, dynamic>;
         return Keyframe(
-          prop: m['prop'] as String,
-          from: (m['from'] as num).toDouble(),
-          to: (m['to'] as num).toDouble(),
-          duration: (m['duration'] as int?) ?? 300,
+          prop: parseArgString(m['prop']),
+          from: parseArgDouble(m['from'], 0),
+          to: parseArgDouble(m['to'], 1),
+          duration: parseArgOptionalInt(m['duration']) ?? 300,
           curve: m['curve'] as String?,
         );
       }).toList();
@@ -98,11 +99,11 @@ commands: [{op, ...}, ...]
       },
     },
     handler: (args) async {
-      final cmds = args['commands'] as List<dynamic>;
+      final cmds = parseArgList(args['commands']);
       var expr = const AvatarExpressionData();
       for (final c in cmds) {
         final m = c as Map<String, dynamic>;
-        switch (m['op'] as String) {
+        switch (parseArgString(m['op'])) {
           case 'eye_left':
             expr = expr.merge(AvatarExpressionData(eyeCurveL: (m['curve'] as num?)?.toDouble()));
             break;
@@ -164,11 +165,11 @@ color: #hex颜色, count: 粒子数量, duration: 持续时间(ms)
     },
     handler: (args) async {
       ui.spawnParticles(ParticleConfig(
-        shape: args['shape'] as String,
-        color: _parseColor((args['color'] as String?) ?? '#ff6b9d'),
-        count: (args['count'] as int?) ?? 20,
-        duration: (args['duration'] as int?) ?? 2000,
-        path: (args['path'] as String?) ?? 'fly_up',
+        shape: parseArgString(args['shape'], 'circle'),
+        color: _parseColor(parseArgString(args['color'], '#ff6b9d')),
+        count: parseArgOptionalInt(args['count']) ?? 20,
+        duration: parseArgOptionalInt(args['duration']) ?? 2000,
+        path: parseArgString(args['path'], 'fly_up'),
       ));
       return jsonEncode({'particles': 'spawned'});
     },
@@ -198,207 +199,24 @@ backdrop: color + blur(暗角强度)
       },
     },
     handler: (args) async {
-      final target = args['target'] as String;
+      final target = parseArgString(args['target']);
       final color = args['color'] as String?;
       if (target == 'backdrop') {
         ui.setScreenMood(ScreenMood(
           bgTop: color != null ? _parseColor(color) : null,
           bgBottom: color != null ? _parseColor(color) : null,
-          vignetteIntensity: (args['blur'] as num?)?.toDouble() != null
-              ? (args['blur'] as num).toDouble() / 10.0 : null,
+          vignetteIntensity: args['blur'] != null
+              ? parseArgDouble(args['blur'], 0) / 10.0 : null,
         ));
       }
       final kfs = <Keyframe>[];
-      if (args['scale'] != null) kfs.add(Keyframe(prop: 'scale', from: 1, to: (args['scale'] as num).toDouble()));
-      if (args['opacity'] != null) kfs.add(Keyframe(prop: 'opacity', from: 1, to: (args['opacity'] as num).toDouble()));
+      if (args['scale'] != null) kfs.add(Keyframe(prop: 'scale', from: 1, to: parseArgDouble(args['scale'], 1)));
+      if (args['opacity'] != null) kfs.add(Keyframe(prop: 'opacity', from: 1, to: parseArgDouble(args['opacity'], 1)));
       if (kfs.isNotEmpty) ui.animate(AnimationStep(target: target, keyframes: kfs));
       return jsonEncode({'appearance': 'updated'});
     },
   ));
 
-  registry.register(ToolEntry(
-    name: 'screen_mood',
-    toolset: 'ui',
-    schema: {
-      'name': 'screen_mood',
-      'description': '''修改屏幕氛围。用 bg_effects 自由绘画。
-
-⛔ 不要调用的情况：
-  - 普通聊天/问题/抱怨 → 不要动背景
-  - 没提背景/风格/氛围/主题 → 不要调用
-✅ 对方提到以下才可调用："背景" "风格" "主题" "氛围" "换个" "改一下" "赛博朋克" "暗黑" "樱花" "极简"
-
-基础参数（全部可选）：color,bg_top,bg_bottom,vignette,particles(0-1),particle_speed,accent
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-★ bg_effects — 你的画布。每项是一个绘制操作。
-  不要只用一种——叠加才有层次。
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-┌─ canvas（首选！自由形状 + 模糊 + 混合模式）─┐
-│ 这是你最强大的画笔。用它画任何东西。       │
-│                                            │
-│ shape: circle | ellipse | rect | path       │
-│ path用points: "x1,y1 x2,y2 ..." 定义多边形 │
-│ x,y: 0-1位置  fill/stroke: #hex色           │
-│ opacity: 0-1   rotation: 弧度               │
-│ scale_x, scale_y: 缩放                      │
-│ ★ blur: 高斯模糊半径(px) — 软光的关键       │
-│ ★ blend: screen|overlay|softLight|plus|     │
-│          multiply|lighten|colorDodge         │
-│                                            │
-│ 模糊 + screen混合 = 发光雾带 = 银河本河     │
-│ 多个椭圆叠在不同位置 = 星云层次             │
-│ path多边形 + blur = 极光带                   │
-└────────────────────────────────────────────┘
-
-┌─ particles（粒子系统，搭配canvas用）───────┐
-│ shape: circle|ellipse|diamond|star5|star8|  │
-│        star12|poly:x1,y1 x2,y2...           │
-│ color, count(1-200), speed(0.1-5)          │
-│ scale(0.1-3), sway(0-100), rotate(bool)     │
-│ direction:[dx,dy]                           │
-└────────────────────────────────────────────┘
-
-┌─ grid / pulse_ring / scanlines（辅助线框）─┐
-│ grid: spacing,color,opacity,perspective     │
-│ pulse_ring: x,y,radius,color,opacity,speed  │
-│ scanlines: direction,spacing,color,opacity  │
-│ 这些是装饰，不要当主力——canvas才是画笔。   │
-└────────────────────────────────────────────┘
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-示例——注意：每个场景用的是什么手法
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-弥散光斑（最简单的canvas用法——一个大椭圆+模糊+screen）：
-{screen_mood({bg_top:"#010308",bg_bottom:"#050d1f",
-  bg_effects:[
-    {op:"canvas",shape:"ellipse",x:0.5,y:0.45,rx:200,ry:140,
-      fill:"#4466cc",opacity:0.25,blur:40,blend:"screen"}
-  ]})}
-
-银河（canvas模糊光斑叠层 + 微点粒子点缀）：
-{screen_mood({bg_top:"#010308",bg_bottom:"#050d1f",vignette:0.45,
-  bg_effects:[
-    {op:"canvas",shape:"ellipse",x:0.5,y:0.5,rx:180,ry:140,
-      fill:"#4466cc",opacity:0.18,blur:35,blend:"screen"},
-    {op:"canvas",shape:"ellipse",x:0.35,y:0.45,rx:120,ry:80,
-      fill:"#88aaff",opacity:0.15,blur:45,blend:"overlay"},
-    {op:"canvas",shape:"ellipse",x:0.65,y:0.55,rx:100,ry:60,
-      fill:"#aaccff",opacity:0.12,blur:50,blend:"screen"},
-    {op:"particles",shape:"dot",color:"#ffffff",count:80,
-      speed:0.03,sway:3,scale:0.2,direction:[0,0.02]}
-  ]})}
-
-极光（path多边形 + 大模糊 + screen混合）：
-{screen_mood({bg_top:"#020210",bg_bottom:"#0a0a1a",
-  bg_effects:[
-    {op:"canvas",shape:"path",
-      points:"-400,20 -200,-40 0,10 150,-30 300,15 450,-10",
-      x:0.5,y:0.4,fill:"#44ff88",opacity:0.15,blur:30,blend:"screen",
-      scale_x:1.5,scale_y:0.8},
-    {op:"canvas",shape:"path",
-      points:"-350,30 -150,-20 50,15 200,-25 400,10",
-      x:0.45,y:0.45,fill:"#4488ff",opacity:0.12,blur:35,blend:"overlay",
-      scale_x:1.3,scale_y:0.7}
-  ]})}
-
-多个发光球体（circle + blur + screen，不同位置不同颜色）：
-{screen_mood({bg_top:"#0a0010",bg_bottom:"#100020",
-  bg_effects:[
-    {op:"canvas",shape:"circle",x:0.3,y:0.4,radius:80,
-      fill:"#ff4488",opacity:0.2,blur:30,blend:"screen"},
-    {op:"canvas",shape:"circle",x:0.6,y:0.35,radius:60,
-      fill:"#44aaff",opacity:0.2,blur:25,blend:"screen"},
-    {op:"canvas",shape:"circle",x:0.45,y:0.55,radius:50,
-      fill:"#8844ff",opacity:0.18,blur:20,blend:"overlay"}
-  ]})}''',
-      'parameters': {
-        'type': 'object',
-        'properties': {
-          'color': {'type': 'string'},
-          'primary': {'type': 'string'},
-          'accent': {'type': 'string'},
-          'bg_top': {'type': 'string'},
-          'bg_bottom': {'type': 'string'},
-          'vignette': {'type': 'number'},
-          'vignette_color': {'type': 'string'},
-          'particles': {'type': 'number'},
-          'particle_speed': {'type': 'number'},
-          'bg_effects': {
-            'type': 'array',
-            'description': '绘制原语数组',
-            'items': {
-              'type': 'object',
-              'properties': {
-                'op': {'type': 'string', 'enum': ['particles', 'grid', 'pulse_ring', 'scanlines', 'canvas']},
-                'shape': {'type': 'string'},
-                'color': {'type': 'string'},
-                'count': {'type': 'integer'},
-                'speed': {'type': 'number'},
-                'scale': {'type': 'number'},
-                'sway': {'type': 'number'},
-                'rotate': {'type': 'boolean'},
-                'direction': {'type': 'array', 'items': {'type': 'number'}},
-                'spacing': {'type': 'number'},
-                'opacity': {'type': 'number'},
-                'perspective': {'type': 'boolean'},
-                'x': {'type': 'number'}, 'y': {'type': 'number'},
-                'radius': {'type': 'number'},
-                'width': {'type': 'number'},
-                // canvas params
-                'fill': {'type': 'string'},
-                'stroke': {'type': 'string'},
-                'stroke_width': {'type': 'number'},
-                'blur': {'type': 'number'},
-                'blend': {'type': 'string'},
-                'scale_x': {'type': 'number'}, 'scale_y': {'type': 'number'},
-                'rotation': {'type': 'number'},
-                'points': {'type': 'string'},
-              },
-            },
-          },
-        },
-        'required': [],
-      },
-    },
-    handler: (args) async {
-      final colorStr = (args['color'] as String?) ?? args['bg_top'] as String? ?? args['bg_bottom'] as String?;
-      final topColor = args['bg_top'] != null ? _parseColor(args['bg_top'] as String) : null;
-      final bottomColor = args['bg_bottom'] != null ? _parseColor(args['bg_bottom'] as String) : null;
-      final fallbackColor = colorStr != null ? _parseColor(colorStr) : null;
-
-      List<Map<String, dynamic>>? effects;
-      final rawEffects = args['bg_effects'];
-      if (rawEffects is List) {
-        effects = rawEffects
-            .whereType<Map<String, dynamic>>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList();
-        if (effects.isEmpty) effects = null;
-      }
-      // If bg_effects not explicitly passed, pass empty list to clear old effects.
-      // (ScreenMood.merge treats null as "keep old" — we want "clear" on omit.)
-      final clearEffects = args.containsKey('bg_effects') ? effects : <Map<String, dynamic>>[];
-
-      ui.setScreenMood(ScreenMood(
-        primary: args['primary'] != null ? _parseColor(args['primary'] as String) : null,
-        accent: args['accent'] != null ? _parseColor(args['accent'] as String) : null,
-        bgTop: topColor ?? fallbackColor,
-        bgBottom: bottomColor ?? fallbackColor,
-        vignetteIntensity: (args['vignette'] as num?)?.toDouble(),
-        vignetteColor: args['vignette_color'] != null ? _parseColor(args['vignette_color'] as String) : null,
-        // Preserve old particle density unless explicitly changed
-        particleDensity: args.containsKey('particles')
-            ? (args['particles'] as num?)?.toDouble()
-            : null,
-        particleSpeed: (args['particle_speed'] as num?)?.toDouble(),
-        bgEffects: clearEffects,
-      ));
-      return jsonEncode({'mood': 'updated', 'effects': effects?.length ?? 0});
-    },
-  ));
 
   registry.register(ToolEntry(
     name: 'layout_gesture',
@@ -416,7 +234,7 @@ gesture: tilt_head | lean_in | step_back | nod | shrug | sigh | pacing | waiting
       },
     },
     handler: (args) async {
-      ui.setGesture(args['gesture'] as String);
+      ui.setGesture(parseArgString(args['gesture']));
       return jsonEncode({'gesture': args['gesture']});
     },
   ));
@@ -439,8 +257,10 @@ render_html({html:"<div>你的代码</div>"})
 2. 再 render_html({file:"canvas/xxx.html"})
 ★ 长代码不要塞进 html 参数——会超出限制。用文件路径！
 
-mode: "replace"(全屏替换,默认) | "append"(追加)
-画布透明背景，全屏宽高。在消息层下方作为背景，重启后自动恢复最后一次 replace 的内容。''',
+★ mode 铁律：
+- 改背景/重新设计/替换画面 → 必须 mode:"replace"
+- 叠加临时装饰/弹窗/浮动元素 → 才用 mode:"append"
+- 如果不确定，永远用 replace——叠加旧内容会导致渲染错乱！''',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -524,7 +344,11 @@ mode: "replace"(全屏替换,默认) | "append"(追加)
         });
       }
 
-      await WebViewCanvasController().renderHtml(html, mode: mode);
+      try {
+        await WebViewCanvasController().renderHtml(html, mode: mode);
+      } catch (e) {
+        return jsonEncode({'rendered': false, 'error': '画布未就绪，请重试: ${e.toString().substring(0, 100)}'});
+      }
       return jsonEncode({
         'rendered': true,
         'mode': mode,
@@ -557,8 +381,12 @@ mode: "replace"(全屏替换,默认) | "append"(追加)
       },
     },
     handler: (args) async {
-      final code = args['code'] as String;
-      return await WebViewCanvasController().evalJs(code);
+      final code = parseArgString(args['code']);
+      try {
+        return await WebViewCanvasController().evalJs(code);
+      } catch (e) {
+        return jsonEncode({'eval_error': e.toString().substring(0, 200)});
+      }
     },
   ));
 
@@ -578,7 +406,7 @@ mode: "replace"(全屏替换,默认) | "append"(追加)
       },
     },
     handler: (args) async {
-      ui.setTypewriter(args['enable'] as bool, speed: (args['speed'] as int?) ?? 30);
+      ui.setTypewriter(parseArgBool(args['enable']), speed: parseArgOptionalInt(args['speed']) ?? 30);
       return jsonEncode({'typewriter': args['enable']});
     },
   ));

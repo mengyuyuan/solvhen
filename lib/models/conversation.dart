@@ -31,7 +31,10 @@ class Conversation {
     if (value is String) {
       try {
         return DateTime.parse(value);
-      } catch (_) {}
+      } catch (_) {
+        // Return epoch to indicate corruption rather than silently pretending "now"
+        return DateTime.fromMillisecondsSinceEpoch(0);
+      }
     }
     return DateTime.now();
   }
