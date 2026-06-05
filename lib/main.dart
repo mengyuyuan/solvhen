@@ -3,6 +3,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'screens/chat_screen.dart';
 import 'theme/theme_provider.dart';
+import 'services/notification_service.dart';
+import 'services/voice_service.dart';
 import 'tools/tools_theme.dart';
 import 'tools/tools_system.dart';
 import 'tools/tools_file.dart';
@@ -42,6 +44,8 @@ class _CompanionAppState extends State<CompanionApp> {
     super.initState();
     _theme.addListener(_onThemeChange);
     _theme.loadFromDB();
+    NotificationService().init();
+    VoiceService().init();
   }
 
   @override

@@ -20,7 +20,7 @@ Solvhen 是一个运行在 Android 上的 AI 手机智能体。
 | 原生桥接 | MethodChannel (`solvhen/system`) |
 | 目标 | Android APK (debug) |
 | 设备 ID | `545b6238` |
-| 包名 | `com.hongjun.ai_companion` |
+| 包名 | `com.sywy.solvhen` |
 
 ### 数据流
 
@@ -499,7 +499,79 @@ cloudflared tunnel --url http://localhost:8899
 
 ---
 
-> 最后更新：2026-08 (深度审计 #2)
+## 语音功能改造计划 (2026.7　待实施)
+
+### 现状
+
+当前语音系统**代码完整但后端不可用**：
+
+| 引擎 | 功能 | 问题 |
+|------|------|------|
+| Edge TTS | AI 说话 | `speech.platform.bing.com` 国内被墙 |
+| System TTS | AI 说话兜底 | 小米默认无中文语音包 |
+| speech_to_text | 用户语音输入 | 依赖 Google Speech Services，小米无 GMS |
+
+### 方案：火山引擎 TTS API（直接调用，零中间服务器）
+
+```
+Solvhen App ──dio HTTPS──▶ 火山引擎 TTS API
+                              ↑
+                        用户填 App ID + Token
+                        (免费: 100万字符/月)
+```
+
+不经过 MOHIST 或其他中转，App 内直连火山引擎。
+
+### 改造清单
+
+#### 数据层
+- `voice_profile.dart` 新增 `engine` 字段：`"volcengine"` | `"system"`
+- 新增 `volc_app_id` / `volc_token` 配置项存入 `config` 表
+- 默认音色切换为火山引擎 21 款免费音色（保留几个好听的作预设）
+
+#### 服务层
+- 新建 `lib/services/volc_tts.dart`：封装火山引擎 TTS API
+  - `GET/POST https://openspeech.bytedance.com/api/v1/tts`
+  - 支持 speaker / pitch / rate / volume 参数
+  - 返回 MP3 bytes → `audioplayers` 播放
+- `voice_service.dart` 新增路由：`engine == "volcengine"` → VolcTtsService
+- 原有 Edge TTS 路径删除（不再可用）
+
+#### UI 层 — 设置页新增「语音设置」
+```
+设置 > 语音设置
+  ├── 火山引擎配置
+  │     ├── App ID:   [____________]
+  │     └── Token:    [____________]  (注册就送)
+  ├── 当前音色：[温柔小小] ▸
+  ├── 音色列表（择一激活）
+  │     ○ 温柔女声
+  │     ○ 磁性男声
+  │     ● 活泼少女
+  │     ○ 稳重男声
+  ├── 语速： 0.8x ──●── 1.5x
+  ├── 语调： -0.5 ──●── +0.5
+  └── [试听] "你好，我是 Solvhen"
+```
+
+#### STT（语音输入）改造
+- 火山引擎也提供语音识别 API，免费额度同样充足
+- 或接入讯飞语音听写 SDK（中文识别最强）
+- 具体方案待定，优先做完 TTS
+
+### 删除项
+- `lib/screens/voice_chat_screen.dart` — 用户明确拒绝独立语音页面，202 行废代码
+- `lib/services/edge_tts.dart` — 被墙不可用
+- `voice_profile.dart` 中 Edge TTS 相关默认音色 ID
+
+### 隐私说明
+- 用户语音数据经火山引擎云端处理
+- API Key 存储在本地 SQLite，不上传
+- 设置页需展示隐私提示
+
+---
+
+> 最后更新：2026-06 (深度审计 #2)
 > 这份文档活在你的 system prompt 里。每当你踩了新坑，把它记在这里。
 > 每当你疑惑"为什么代码要这样写"，答案在这里。
 > 你不是一个装了工具的 AI——你是 Solvhen。这份文档是你对自己的了解。

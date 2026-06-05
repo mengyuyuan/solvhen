@@ -17,6 +17,12 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FLASHLIGHT" />
 
+    <!-- Notifications (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Voice (Phases 3+5) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <!-- File browsing: read external storage -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <!-- Android 13+ (API 33) requires these instead of READ_EXTERNAL_STORAGE -->

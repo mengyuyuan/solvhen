@@ -15,7 +15,7 @@ class DB {
     try {
       final dbPath = await getDatabasesPath();
       final path = p.join(dbPath, 'companion_v2.db');
-      _db = await openDatabase(path, version: 7, onCreate: _create,
+      _db = await openDatabase(path, version: 9, onCreate: _create,
         onUpgrade: _upgrade,
         onConfigure: (db) async {
           await db.rawQuery('PRAGMA journal_mode=WAL');
@@ -33,7 +33,7 @@ class DB {
         final path = p.join(dbPath, 'companion_v2.db');
         await deleteDatabase(path);
         _dbCompleter = Completer<Database>();
-        _db = await openDatabase(path, version: 7, onCreate: _create,
+        _db = await openDatabase(path, version: 9, onCreate: _create,
           onUpgrade: _upgrade,
           onConfigure: (db) async {
             await db.rawQuery('PRAGMA journal_mode=WAL');
@@ -141,6 +141,17 @@ class DB {
       )
     ''');
     await db.execute('CREATE INDEX idx_skills_enabled ON skills(enabled, priority)');
+    // ── Voice Profiles ──
+    await db.execute("CREATE TABLE voice_profiles ("
+      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+      "name TEXT NOT NULL,"
+      "voice_id TEXT NOT NULL DEFAULT 'zh-CN-XiaoxiaoNeural',"
+      "pitch REAL NOT NULL DEFAULT 0.0,"
+      "rate REAL NOT NULL DEFAULT 1.0,"
+      "volume REAL NOT NULL DEFAULT 1.0,"
+      "locale TEXT NOT NULL DEFAULT 'zh-CN',"
+      "active INTEGER NOT NULL DEFAULT 0,"
+      "created_at TEXT NOT NULL)");
     await db.insert('config', {'key': 'base_url', 'value': 'https://api.deepseek.com/v1'});
     await db.insert('config', {'key': 'model', 'value': 'deepseek-v4-pro'});
     await db.insert('config', {'key': 'api_key', 'value': ''});
@@ -255,6 +266,24 @@ class DB {
         )
       ''');
       await db.execute('CREATE INDEX idx_skills_enabled ON skills(enabled, priority)');
+    }
+    if (oldV < 8) {
+      await db.execute("CREATE TABLE voice_profiles ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "name TEXT NOT NULL,"
+        "voice_id TEXT NOT NULL DEFAULT 'zh-CN-XiaoxiaoNeural',"
+        "pitch REAL NOT NULL DEFAULT 0.0,"
+        "rate REAL NOT NULL DEFAULT 1.0,"
+        "volume REAL NOT NULL DEFAULT 1.0,"
+        "locale TEXT NOT NULL DEFAULT 'zh-CN',"
+        "active INTEGER NOT NULL DEFAULT 0,"
+        "created_at TEXT NOT NULL)");
+    }
+    if (oldV < 9) {
+      // Add voice_id column for Edge TTS
+      try {
+        await db.execute("ALTER TABLE voice_profiles ADD COLUMN voice_id TEXT NOT NULL DEFAULT 'zh-CN-XiaoxiaoNeural'");
+      } catch (_) {}
     }
   }
 
@@ -609,5 +638,38 @@ class DB {
   static String _escapeFts5(String query) {
     // Strip all FTS5 special characters — keep it simple
     return query.replaceAll(RegExp(r'[*"()+\-]'), '').trim();
+  }
+  // ═══ VOICE PROFILES ═══
+
+  static Future<List<Map<String, dynamic>>> getVoiceProfiles() async {
+    final db = await database;
+    return db.query('voice_profiles', orderBy: 'created_at ASC');
+  }
+
+  static Future<void> createVoiceProfile({
+    required String name, String voiceId = 'zh-CN-XiaoxiaoNeural',
+    double pitch = 0.0, double rate = 1.0,
+    double volume = 1.0, String locale = 'zh-CN', DateTime? createdAt,
+  }) async {
+    final db = await database;
+    await db.insert('voice_profiles', {
+      'name': name, 'voice_id': voiceId,
+      'pitch': pitch, 'rate': rate,
+      'volume': volume, 'locale': locale, 'active': 0,
+      'created_at': (createdAt ?? DateTime.now()).toIso8601String(),
+    });
+  }
+
+  static Future<void> activateVoiceProfile(int? id) async {
+    final db = await database;
+    await db.update('voice_profiles', {'active': 0});
+    if (id != null) {
+      await db.update('voice_profiles', {'active': 1}, where: 'id = ?', whereArgs: [id]);
+    }
+  }
+
+  static Future<void> deleteVoiceProfile(int id) async {
+    final db = await database;
+    await db.delete('voice_profiles', where: 'id = ?', whereArgs: [id]);
   }
 }

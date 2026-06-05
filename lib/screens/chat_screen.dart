@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,8 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:permission_handler/permission_handler.dart';
 import '../theme/theme_provider.dart';
 import '../services/database_service.dart';
+import '../services/notification_service.dart';
+import '../services/voice_service.dart';
 import '../models/conversation.dart';
 import '../commands/command_registry.dart';
 import '../commands/command_executor.dart';
@@ -33,24 +38,45 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   bool _showSuggestions = false;
   List<Conversation> _conversations = [];
   bool _drawerOpen = false;
+  int? _lastConvId;
   final Map<int, int> _typewriterIdx = {};
   final Set<int> _expandedTools = {};
-  int? _lastConvId;
+
+  // Push notification overlay
+  PushEvent? _pushEvent;
+  StreamSubscription<PushEvent>? _pushSub;
 
   // Compiled-once regexes for _cleanDisplay
-  static final _reToolCalls = RegExp(r'<tool_calls\b[^>]*>.*?</tool_calls>', dotAll: true);
-  static final _reInvoke = RegExp(r'<invoke\s[^>]*>.*?</invoke>', dotAll: true);
-  static final _reParameter = RegExp(r'<parameter\s[^>]*>.*?</parameter>', dotAll: true);
-  static final _reXmlTags = RegExp(r'</?(?:tool_calls|invoke|parameter)\b[^>]*>', dotAll: true);
+  static final _reToolCalls = RegExp(r'<tool_calls\\b[^>]*>.*?</tool_calls>', dotAll: true);
+  static final _reInvoke = RegExp(r'<invoke\\s[^>]*>.*?</invoke>', dotAll: true);
+  static final _reParameter = RegExp(r'<parameter\\s[^>]*>.*?</parameter>', dotAll: true);
+  static final _reXmlTags = RegExp(r'</?(?:tool_calls|invoke|parameter)\\b[^>]*>', dotAll: true);
+
+  // Voice mode
+  bool _voiceMode = false;
+  final stt.SpeechToText _stt = stt.SpeechToText();
+  bool _sttReady = false;
+  bool _recording = false;
+  String _voiceTranscript = '';
+  final ValueNotifier<double> _voiceLevel = ValueNotifier(0.0);
 
   @override
   void initState() {
     super.initState();
     _loadConversations();
+    _pushSub = NotificationService().onPush.listen((event) {
+      if (mounted) setState(() => _pushEvent = event);
+    });
+    _stt.initialize().then((ok) { if (mounted) setState(() => _sttReady = ok); });
   }
 
   @override
-  void dispose() { _ctrl.dispose(); _scroll.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    _scroll.dispose();
+    _pushSub?.cancel();
+    super.dispose();
+  }
 
   Future<void> _loadConversations() async {
     _conversations = await DB.getConversations();
@@ -313,6 +339,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         actions: [
           IconButton(
+            icon: Icon(Icons.mic_outlined, color: c.textSecondary, size: 22),
+            onPressed: _toggleVoiceMode,
+          ),
+          IconButton(
             icon: Icon(Icons.settings_outlined, color: c.textSecondary, size: 22),
             onPressed: _goSettings,
           ),
@@ -328,6 +358,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               children: [
                 const IgnorePointer(child: WebViewCanvas()),
                 _buildMessagesColumn(s, c),
+                if (_pushEvent != null) _buildPushOverlay(c),
               ],
             ),
           ),
@@ -343,6 +374,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Column(
       children: [
         _buildContextBar(s, c),
+        if (s.error != null && s.error!.isNotEmpty) _buildErrorBanner(s, c),
         ThinkingOverlay(
           state: s.agentState,
           accentColor: c.accent,
@@ -361,12 +393,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // ═══════════════════════════════════════
 
   Widget _buildContextBar(ChatState s, ThemeColors c) {
-    final pct = (s.contextRatio * 100).clamp(0.0, 100.0);
+    final hasApiData = s.apiPromptTokens > 0 || s.apiCompletionTokens > 0;
+    final apiTotal = s.apiPromptTokens + s.apiCompletionTokens;
+    final displayTokens = hasApiData ? apiTotal : s.tokenCount;
+    final pct = s.contextRatio > 0
+        ? (s.contextRatio * 100).clamp(0.0, 100.0)
+        : (s.contextLimit > 0 ? (displayTokens / s.contextLimit * 100).clamp(0.0, 100.0) : 0.0);
+    final barValue = s.contextRatio > 0
+        ? s.contextRatio.clamp(0.0, 1.0)
+        : (s.contextLimit > 0 ? (displayTokens / s.contextLimit).clamp(0.0, 1.0) : 0.0);
     final color = pct > 95
         ? const Color(0xFFFF3B30)
         : pct > 80
             ? const Color(0xFFFF9500)
-            : c.accent;
+            : hasApiData ? const Color(0xFF34C759) : c.accent;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -375,18 +415,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         border: Border(bottom: BorderSide(color: c.separator, width: 0.5)),
       ),
       child: Row(children: [
-        // Token count
+        // Token count — API-real primary, estimate secondary
         Text(
-          '${_fmtK(s.tokenCount)} / ${_fmtK(s.contextLimit)}',
-          style: TextStyle(fontSize: 11, color: c.textTertiary, fontFamily: 'monospace'),
+          hasApiData
+              ? 'API ${_fmtK(apiTotal)}'
+              : '${_fmtK(s.tokenCount)} / ${_fmtK(s.contextLimit)}',
+          style: TextStyle(fontSize: 11,
+            color: hasApiData ? const Color(0xFF34C759) : c.textTertiary,
+            fontFamily: 'monospace',
+            fontWeight: hasApiData ? FontWeight.w600 : FontWeight.w400,
+          ),
         ),
+        if (hasApiData) ...[
+          const SizedBox(width: 4),
+          Text(
+            '(${_fmtK(s.tokenCount)}估)',
+            style: TextStyle(fontSize: 9, color: c.textTertiary, fontFamily: 'monospace'),
+          ),
+        ],
         const SizedBox(width: 8),
         // Progress bar
         Expanded(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(3),
             child: LinearProgressIndicator(
-              value: s.contextRatio.clamp(0.0, 1.0),
+              value: barValue,
               backgroundColor: c.separator,
               valueColor: AlwaysStoppedAnimation<Color>(color),
               minHeight: 4,
@@ -395,7 +448,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         const SizedBox(width: 8),
         Text(
-          '${pct.toStringAsFixed(0)}%',
+          hasApiData
+              ? 'P:${_fmtK(s.apiPromptTokens)} C:${_fmtK(s.apiCompletionTokens)}'
+              : '${pct.toStringAsFixed(0)}%',
           style: TextStyle(fontSize: 11, color: color, fontFamily: 'monospace'),
         ),
       ]),
@@ -411,6 +466,117 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (bytes >= 1048576) return '${(bytes / 1048576).toStringAsFixed(1)}MB';
     if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(0)}KB';
     return '$bytes B';
+  }
+
+  // ═══════════════════════════════════════
+  // ERROR BANNER
+  // ═══════════════════════════════════════
+
+  Widget _buildErrorBanner(ChatState s, ThemeColors c) {
+    final msg = s.error ?? '';
+    final isBalance = msg.contains('余额已用尽');
+    final isRateLimit = msg.contains('太频繁');
+    final bgColor = isBalance
+        ? const Color(0xFFFF3B30).withValues(alpha: 0.12)
+        : isRateLimit
+            ? const Color(0xFFFF9500).withValues(alpha: 0.12)
+            : const Color(0xFFFF9500).withValues(alpha: 0.08);
+    final borderColor = isBalance
+        ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
+        : const Color(0xFFFF9500).withValues(alpha: 0.3);
+    final icon = isBalance ? Icons.account_balance_wallet_outlined
+        : isRateLimit ? Icons.speed : Icons.warning_amber_outlined;
+    final iconColor = isBalance ? const Color(0xFFFF3B30) : const Color(0xFFFF9500);
+
+    return GestureDetector(
+      onTap: () => ref.read(chatProvider.notifier).dismissError(),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: bgColor,
+          border: Border(bottom: BorderSide(color: borderColor, width: 0.5)),
+        ),
+        child: Row(children: [
+          Icon(icon, size: 16, color: iconColor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(msg, style: TextStyle(fontSize: 12, color: iconColor)),
+          ),
+          Text('点击关闭',
+              style: TextStyle(fontSize: 11, color: c.textTertiary)),
+        ]),
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════
+  // PUSH OVERLAY
+  // ═══════════════════════════════════════
+
+  Widget _buildPushOverlay(ThemeColors c) {
+    final event = _pushEvent!;
+    return Positioned.fill(
+      child: GestureDetector(
+        onTap: () => setState(() => _pushEvent = null),
+        child: Container(
+          color: Colors.black54,
+          alignment: Alignment.center,
+          child: GestureDetector(
+            onTap: () {}, // absorb taps inside card
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: c.bgCardSolid,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: c.shadowSm,
+                border: Border.all(color: c.accent.withValues(alpha: 0.2), width: 1),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Avatar + title
+                  Row(children: [
+                    const AgentAvatar(size: 40, state: AgentState.speaking),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(event.title,
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: c.textPrimary)),
+                    ),
+                  ]),
+                  const SizedBox(height: 12),
+                  Text(event.body,
+                    style: TextStyle(fontSize: 14, color: c.textSecondary, height: 1.5)),
+                  const SizedBox(height: 20),
+                  Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    TextButton(
+                      onPressed: () => setState(() => _pushEvent = null),
+                      child: Text('稍后', style: TextStyle(color: c.textTertiary)),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () {
+                        setState(() => _pushEvent = null);
+                        // Focus on input for quick reply
+                        _ctrl.clear();
+                        setState(() { _hasText = false; _showSuggestions = false; });
+                        FocusScope.of(context).requestFocus();
+                      },
+                      style: FilledButton.styleFrom(
+                        backgroundColor: c.accent,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('回复'),
+                    ),
+                  ]),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   // ═══════════════════════════════════════
@@ -656,13 +822,76 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           }
 
           final text = _typewriterText(m, i);
+          final isSpeaking = m.role == 'assistant' && ref.read(chatProvider).ttsSpeaking;
           return GestureDetector(
             onLongPress: () => _onBubbleLongPress(m, false),
-            child: _bubble(text, false, c),
+            onTap: isSpeaking
+                ? () => ref.read(chatProvider.notifier).stopSpeaking()
+                : null,
+            child: _bubble(text, false, c, showSpeaking: isSpeaking),
           );
         },
       ),
     );
+  }
+
+  // ═══════════════════════════════════════
+  // VOICE MODE
+  // ═══════════════════════════════════════
+
+  void _startVoice() async {
+    debugPrint('[Solvhen] _startVoice: sttReady=$_sttReady recording=$_recording');
+    if (!_sttReady) {
+      setState(() => _voiceTranscript = '语音识别未就绪，请重试');
+      return;
+    }
+    if (_recording) return;
+    // Request RECORD_AUDIO explicitly (Xiaomi needs this)
+    var status = await Permission.microphone.status;
+    if (!status.isGranted) {
+      status = await Permission.microphone.request();
+    }
+    if (!status.isGranted) {
+      setState(() => _voiceTranscript = '请到系统设置中允许麦克风权限');
+      return;
+    }
+    setState(() { _recording = true; _voiceTranscript = ''; });
+    _stt.listen(
+      onResult: (r) {
+        final words = r.recognizedWords;
+        setState(() => _voiceTranscript = words);
+        if (r.finalResult && words.trim().isNotEmpty) {
+          _stopVoice();
+          _sendVoiceText(words);
+        }
+      },
+      onSoundLevelChange: (l) => _voiceLevel.value = l / 10.0,
+      listenMode: stt.ListenMode.dictation,
+      localeId: 'zh_CN',
+    );
+  }
+
+  void _stopVoice() {
+    _stt.stop();
+    setState(() => _recording = false);
+    _voiceLevel.value = 0.0;
+  }
+
+  void _sendVoiceText(String text) {
+    _ctrl.text = text;
+    _send();
+  }
+
+  void _toggleVoiceMode() {
+    final s = ref.read(chatProvider);
+    if (s.ttsSpeaking) {
+      ref.read(chatProvider.notifier).stopSpeaking();
+      return;
+    }
+    setState(() {
+      _voiceMode = !_voiceMode;
+      if (!_voiceMode) _stopVoice();
+    });
   }
 
   // ═══════════════════════════════════════
@@ -673,62 +902,135 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Widget _buildInput(ThemeColors c) {
     final chatState = ref.watch(chatProvider);
+
+    // Voice mode — large recording button
+    if (_voiceMode) {
+      return Container(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + 16),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Toggle bar
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            TextButton.icon(
+              onPressed: _toggleVoiceMode,
+              icon: const Icon(Icons.keyboard, size: 18),
+              label: const Text('键盘'),
+              style: TextButton.styleFrom(foregroundColor: c.textTertiary),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          // Transcript
+          if (_voiceTranscript.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Text(_voiceTranscript,
+                style: TextStyle(fontSize: 16, color: c.textPrimary),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          const SizedBox(height: 16),
+          // Mic button
+          GestureDetector(
+            onTap: _recording ? _stopVoice : _startVoice,
+            child: ValueListenableBuilder<double>(
+              valueListenable: _voiceLevel,
+              builder: (_, level, __) {
+                final scale = 1.0 + level * 0.3;
+                return Transform.scale(
+                  scale: scale,
+                  child: Container(
+                    width: 80, height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _recording
+                          ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+                          : c.accent.withValues(alpha: 0.2),
+                      border: Border.all(
+                        color: _recording ? const Color(0xFFFF3B30) : c.accent,
+                        width: 3,
+                      ),
+                      boxShadow: _recording ? [
+                        BoxShadow(color: const Color(0xFFFF3B30).withValues(alpha: 0.3), blurRadius: 24, spreadRadius: 2),
+                      ] : null,
+                    ),
+                    child: Icon(
+                      _recording ? Icons.stop_rounded : Icons.mic,
+                      size: 36,
+                      color: _recording ? const Color(0xFFFF3B30) : c.accent,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _recording ? '正在聆听... 说完点击停止' : '点击开始说话',
+            style: TextStyle(fontSize: 13, color: c.textTertiary),
+          ),
+        ]),
+      );
+    }
+
+    // Text mode — normal input
     return Container(
-      padding: EdgeInsets.only(left: 16, right: 8, top: 10, bottom: MediaQuery.of(context).padding.bottom + 10),
+      padding: EdgeInsets.only(left: 12, right: 8, top: 8, bottom: MediaQuery.of(context).padding.bottom + 8),
       decoration: BoxDecoration(
         color: c.bgCardSolid,
         border: Border(top: BorderSide(color: c.separator, width: 0.5)),
       ),
       child: Row(children: [
+        // Left: + button (always)
         IconButton(
-          icon: const Icon(Icons.attach_file_rounded, size: 22),
+          icon: const Icon(Icons.add_rounded, size: 24),
           color: c.textSecondary,
           onPressed: _pickFile,
           tooltip: '上传文件',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
         ),
+        // Text field
         Expanded(
-          child: Container(
-            decoration: BoxDecoration(color: c.bgRoot, borderRadius: BorderRadius.circular(24)),
-            child: TextField(
-              controller: _ctrl,
-              onChanged: _onTextChanged,
-              maxLines: null,
-              minLines: 1,
-              keyboardType: TextInputType.multiline,
-              textInputAction: TextInputAction.newline,
-              onSubmitted: (_) => _send(),
-              style: TextStyle(fontSize: 15, color: c.textPrimary),
-              decoration: InputDecoration(
-                hintText: '输入 / 查看指令，或直接聊天...',
-                hintStyle: TextStyle(color: c.textPlaceholder, fontSize: 15),
-                border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              ),
+          child: TextField(
+            controller: _ctrl,
+            onChanged: _onTextChanged,
+            maxLines: 6,
+            maxLength: 4000,
+            minLines: 1,
+            keyboardType: TextInputType.multiline,
+            textInputAction: TextInputAction.newline,
+            onSubmitted: (_) => _send(),
+            style: TextStyle(fontSize: 15, color: c.textPrimary),
+            decoration: InputDecoration(
+              hintText: '消息...',
+              hintStyle: TextStyle(color: c.textPlaceholder, fontSize: 15),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             ),
           ),
         ),
         const SizedBox(width: 4),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 200),
-          child: chatState.loading
-              ? IconButton(
-                  key: const ValueKey('stop'),
-                  icon: const Icon(Icons.stop_rounded, size: 24),
-                  color: Colors.redAccent,
-                  onPressed: () {
-                    ref.read(chatProvider.notifier).cancel();
-                  },
-                  tooltip: '停止',
-                )
-              : IconButton(
-                  key: const ValueKey('send'),
-                  icon: Icon(_hasText ? Icons.send_rounded : Icons.mic_none_rounded, size: 24),
-                  color: _hasText ? c.accent : c.textTertiary,
-                  onPressed: _hasText ? _send : null,
-                ),
-        ),
+        // Right: mic (empty) / send (has text) / stop (loading)
+        if (chatState.loading)
+          IconButton(
+            icon: const Icon(Icons.stop_rounded, size: 24),
+            color: Colors.redAccent,
+            onPressed: () {
+              ref.read(chatProvider.notifier).stopSpeaking();
+              ref.read(chatProvider.notifier).cancel();
+            },
+          )
+        else if (_hasText)
+          IconButton(
+            icon: const Icon(Icons.send_rounded, size: 22),
+            color: c.accent,
+            onPressed: _send,
+          )
+        else
+          IconButton(
+            icon: const Icon(Icons.mic_rounded, size: 24),
+            color: c.textSecondary,
+            onPressed: _toggleVoiceMode,
+          ),
       ]),
     );
   }
@@ -762,7 +1064,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return _cleanDisplay(m.content);
   }
 
-  Widget _bubble(String text, bool isUser, ThemeColors c) {
+  Widget _bubble(String text, bool isUser, ThemeColors c, {bool showSpeaking = false}) {
     final clean = _cleanDisplay(text);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -776,25 +1078,41 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: AgentAvatar(size: 24, state: AgentState.idle),
             ),
           Flexible(
-            child: Container(
-              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: isUser ? (UIController().userBubbleColor ?? c.bubbleUser) : (UIController().bubbleColor ?? c.bubbleAssistant),
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: isUser ? const Radius.circular(18) : const Radius.circular(4),
-                  bottomRight: isUser ? const Radius.circular(4) : const Radius.circular(18),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+              Container(
+                constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isUser ? (UIController().userBubbleColor ?? c.bubbleUser) : (UIController().bubbleColor ?? c.bubbleAssistant),
+                  borderRadius: BorderRadius.only(
+                    topLeft: const Radius.circular(18),
+                    topRight: const Radius.circular(18),
+                    bottomLeft: isUser ? const Radius.circular(18) : const Radius.circular(4),
+                    bottomRight: isUser ? const Radius.circular(4) : const Radius.circular(18),
+                  ),
                 ),
+                child: Text(clean, style: TextStyle(fontSize: 15, color: c.textPrimary, height: 1.5)),
               ),
-              child: Text(clean, style: TextStyle(
-                fontSize: 15, color: c.textPrimary, height: 1.5,
-              )),
-            ),
+              if (showSpeaking) _buildSpeakingIndicator(c),
+            ]),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildSpeakingIndicator(ThemeColors c) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, top: 4),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        _SpeakingDot(delay: 0, color: c.accent),
+        const SizedBox(width: 3),
+        _SpeakingDot(delay: 200, color: c.accent),
+        const SizedBox(width: 3),
+        _SpeakingDot(delay: 400, color: c.accent),
+        const SizedBox(width: 8),
+        Text('点击停止', style: TextStyle(fontSize: 10, color: c.textTertiary)),
+      ]),
     );
   }
 
@@ -808,5 +1126,40 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     c = c.replaceAll(_reParameter, '');
     c = c.replaceAll(_reXmlTags, '');
     return c.trim();
+  }
+}
+
+class _SpeakingDot extends StatefulWidget {
+  final int delay;
+  final Color color;
+  const _SpeakingDot({required this.delay, required this.color});
+  @override
+  State<_SpeakingDot> createState() => _SpeakingDotState();
+}
+
+class _SpeakingDotState extends State<_SpeakingDot> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 800));
+    Future.delayed(Duration(milliseconds: widget.delay), () {
+      if (mounted) _ctrl.repeat(reverse: true);
+    });
+  }
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Container(
+        width: 4, height: 4,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: widget.color.withValues(alpha: 0.3 + _ctrl.value * 0.7),
+        ),
+      ),
+    );
   }
 }

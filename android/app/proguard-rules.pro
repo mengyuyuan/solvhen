@@ -3,7 +3,7 @@
 -dontwarn io.flutter.**
 
 # Keep webview
--keep class com.hongjun.ai_companion.** { *; }
+-keep class com.sywy.solvhen.** { *; }
 -keepattributes *Annotation*
 -keepattributes SourceFile,LineNumberTable
 

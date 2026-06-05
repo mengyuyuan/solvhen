@@ -1,4 +1,4 @@
-package com.hongjun.ai_companion
+package com.sywy.solvhen
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter

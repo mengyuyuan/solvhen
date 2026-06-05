@@ -18,6 +18,15 @@ dependencies:
   dio: ^5.4.0
   webview_flutter: ^4.4.0
   file_picker: ^8.0.0
+  flutter_local_notifications: ^21.0.0
+  permission_handler: ^11.0.0
+  flutter_tts: ^4.0.0
+  speech_to_text: ^7.0.0
+  record: ^5.0.0
+  audioplayers: ^6.0.0
+
+dependency_overrides:
+  record_platform_interface: 1.0.0
 
 dev_dependencies:
   flutter_test:

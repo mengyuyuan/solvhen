@@ -6,16 +6,105 @@ import '../models/message.dart';
 import 'database_service.dart';
 import 'tool_executor.dart';
 
+// ═══════════════════════════════════════════════
+// API Usage — real token count from API response
+// ═══════════════════════════════════════════════
+
+class ApiUsage {
+  final int promptTokens;
+  final int completionTokens;
+  final int totalTokens;
+  const ApiUsage({
+    required this.promptTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+  });
+
+  factory ApiUsage.fromJson(Map<String, dynamic> json) {
+    return ApiUsage(
+      promptTokens: (json['prompt_tokens'] as num?)?.toInt() ?? 0,
+      completionTokens: (json['completion_tokens'] as num?)?.toInt() ?? 0,
+      totalTokens: (json['total_tokens'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════
+// API Error exceptions — typed so UI can react
+// ═══════════════════════════════════════════════
+
+class ApiBalanceException implements Exception {
+  final String message;
+  const ApiBalanceException(this.message);
+  @override String toString() => 'ApiBalanceException: $message';
+}
+
+class ApiRateLimitException implements Exception {
+  final String message;
+  const ApiRateLimitException(this.message);
+  @override String toString() => 'ApiRateLimitException: $message';
+}
+
+class ApiAuthException implements Exception {
+  final String message;
+  const ApiAuthException(this.message);
+  @override String toString() => 'ApiAuthException: $message';
+}
+
 class ApiService {
   final Dio dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 30),
     receiveTimeout: const Duration(seconds: 120),
     headers: {'Content-Type': 'application/json'},
+    validateStatus: (s) => s != null && s < 500, // let us handle 4xx in code
   ));
 
+  // ═══════════════════════════════════════════════
+  // ERROR DETECTION — classify HTTP errors
+  // ═══════════════════════════════════════════════
+
+  Never _throwApiError(int? statusCode, String? body) {
+    final msg = _extractErrorMessage(body);
+    switch (statusCode) {
+      case 402:
+        throw ApiBalanceException(
+            'API余额已用尽，请前往对应平台充值或更换API Key');
+      case 429:
+        throw ApiRateLimitException(
+            msg.isNotEmpty ? '请求太频繁：$msg' : '请求太频繁，请稍后再试');
+      case 401:
+        throw ApiAuthException(
+            msg.isNotEmpty ? 'API Key无效：$msg' : 'API Key无效，请检查或更换');
+      case 403:
+        throw ApiAuthException(
+            msg.isNotEmpty ? 'API访问被拒：$msg' : 'API访问被拒绝，请检查Key权限或更换');
+      default:
+        throw Exception(
+            msg.isNotEmpty ? msg : 'API请求失败 (HTTP $statusCode)');
+    }
+  }
+
+  String _extractErrorMessage(String? body) {
+    if (body == null || body.isEmpty) return '';
+    try {
+      final json = jsonDecode(body);
+      return (json['error']?['message'] as String?) ?? '';
+    } catch (_) {
+      if (body.length <= 120) return body;
+      return '${body.substring(0, 120)}…';
+    }
+  }
+
+  ApiUsage? _extractUsage(Response resp) {
+    final usage = resp.data is Map ? resp.data['usage'] : null;
+    if (usage is Map<String, dynamic>) return ApiUsage.fromJson(usage);
+    return null;
+  }
+
   /// Streaming chat — returns full content via onChunk callback.
-  /// Throws on error so caller can handle gracefully.
-  Future<String> chatStream({
+  /// Returns (content, api usage). Usage may be null for streaming.
+  /// Throws typed exceptions on API errors.
+  Future<({String content, ApiUsage? usage})> chatStream({
     required String systemPrompt,
     required List<Message> history,
     required String userMessage,
@@ -25,38 +114,57 @@ class ApiService {
     final url = '${cfg['base_url']}/chat/completions';
     final key = cfg['api_key'] ?? '';
     final model = cfg['model'] ?? 'deepseek-v4-pro';
-    if (key.isEmpty) throw Exception('请先设置API Key');
+    if (key.isEmpty) throw ApiAuthException('请先设置API Key');
 
     final msgs = _buildMessages(systemPrompt, history, userMessage);
 
-    final resp = await dio.post(url,
-      options: Options(
-        headers: {'Authorization': 'Bearer $key'},
-        responseType: ResponseType.stream,
-      ),
-      data: {'model': model, 'messages': msgs, 'stream': true, 'temperature': 0.8, 'max_tokens': 2048},
-    );
+    Response<dynamic> resp;
+    try {
+      resp = await dio.post(url,
+        options: Options(
+          headers: {'Authorization': 'Bearer $key'},
+          responseType: ResponseType.stream,
+        ),
+        data: {'model': model, 'messages': msgs, 'stream': true, 'temperature': 0.8, 'max_tokens': 2048},
+      );
+    } on DioException catch (e) {
+      final errMsg = e.type == DioExceptionType.connectionTimeout
+          ? '连接超时，请检查网络'
+          : e.type == DioExceptionType.receiveTimeout
+              ? '服务器响应超时，请重试'
+              : '网络错误：${e.message ?? "未知"}';
+      throw Exception(errMsg);
+    }
+
+    final statusCode = resp.statusCode ?? 0;
+    if (statusCode >= 400) {
+      // For streaming errors, read the error body
+      _throwApiError(statusCode, null);
+    }
 
     final buf = StringBuffer();
+    ApiUsage? usage;
     await for (final chunk in (resp.data as ResponseBody).stream) {
       for (final line in utf8.decode(chunk).split('\n')) {
         if (line.startsWith('data: ') && line != 'data: [DONE]') {
           try {
-            final c = jsonDecode(line.substring(6))['choices']?[0]?['delta']?['content'];
+            final data = jsonDecode(line.substring(6));
+            final c = data['choices']?[0]?['delta']?['content'];
             if (c != null) { buf.write(c); onChunk?.call(c); }
+            // Extract usage from final chunk (some providers include it)
+            final u = data['usage'];
+            if (u is Map<String, dynamic>) usage = ApiUsage.fromJson(u);
           } catch (_) { /* skip malformed SSE chunk */ }
         }
       }
     }
-    // Strip XML tool calls from streaming output — DeepSeek may embed
-    // <invoke> blocks even in streaming responses without tools.
-    return ToolExecutor.stripToolCallsFromContent(buf.toString());
+    return (content: ToolExecutor.stripToolCallsFromContent(buf.toString()), usage: usage);
   }
 
   /// Non-streaming chat WITH native function calling.
-  /// Returns (content, tool_calls if any, raw tool_calls JSON for history).
-  /// Throws on error so caller can handle gracefully.
-  Future<({String content, List<ToolCall>? toolCalls, List<dynamic>? rawToolCalls})> chatWithTools({
+  /// Returns (content, tool_calls if any, raw tool_calls JSON for history, api usage).
+  /// Throws typed exceptions (ApiBalanceException etc.) on API errors.
+  Future<({String content, List<ToolCall>? toolCalls, List<dynamic>? rawToolCalls, ApiUsage? usage})> chatWithTools({
     required String systemPrompt,
     required List<Message> history,
     required String userMessage,
@@ -67,7 +175,7 @@ class ApiService {
     final url = '${cfg['base_url']}/chat/completions';
     final key = cfg['api_key'] ?? '';
     final model = cfg['model'] ?? 'deepseek-v4-pro';
-    if (key.isEmpty) throw Exception('请先设置API Key');
+    if (key.isEmpty) throw ApiAuthException('请先设置API Key');
 
     final msgs = _buildMessages(systemPrompt, history, userMessage);
 
@@ -83,10 +191,27 @@ class ApiService {
       body['tool_choice'] = 'auto';
     }
 
-    final resp = await dio.post(url,
-      options: Options(headers: {'Authorization': 'Bearer $key'}),
-      data: body,
-    );
+    Response resp;
+    try {
+      resp = await dio.post(url,
+        options: Options(headers: {'Authorization': 'Bearer $key'}),
+        data: body,
+      );
+    } on DioException catch (e) {
+      // Network errors (timeout, DNS, etc.) — no HTTP response
+      final errMsg = e.type == DioExceptionType.connectionTimeout
+          ? '连接超时，请检查网络'
+          : e.type == DioExceptionType.receiveTimeout
+              ? '服务器响应超时，请重试'
+              : '网络错误：${e.message ?? "未知"}';
+      throw Exception(errMsg);
+    }
+
+    // Check for API-level errors (4xx)
+    final statusCode = resp.statusCode ?? 0;
+    if (statusCode >= 400) {
+      _throwApiError(statusCode, resp.data is String ? resp.data as String : null);
+    }
 
     final choice = resp.data['choices']?[0];
     final msg = choice?['message'] as Map<String, dynamic>? ?? {};
@@ -95,9 +220,6 @@ class ApiService {
     var rawToolCalls = msg['tool_calls'] as List<dynamic>?;
 
     // Fallback: DeepSeek returns tool calls as XML in content text
-    // (when tool_calls array is empty/null but content has XML invoke format)
-    // Always attempt to parse XML from content — don't rely on contains()
-    // which may return false positives due to encoding issues.
     if (toolCalls == null) {
       if (kDebugMode) {
         debugPrint('[API-RAW] has_tools=${tools.isNotEmpty} native_tc=${rawToolCalls?.length ?? 0} content_len=${content.length}');
@@ -120,16 +242,14 @@ class ApiService {
           'function': {'name': tc.name, 'arguments': tc.arguments},
         }).toList();
       } else {
-        // No XML tool calls found — still strip any residual XML for clean display
         content = ToolExecutor.stripToolCallsFromContent(content);
       }
     } else {
-      // Always strip XML from content — DeepSeek may embed invoke blocks
-      // in content even when proper tool_calls array is present.
       content = ToolExecutor.stripToolCallsFromContent(content);
     }
 
-    return (content: content, toolCalls: toolCalls, rawToolCalls: rawToolCalls);
+    final usage = _extractUsage(resp);
+    return (content: content, toolCalls: toolCalls, rawToolCalls: rawToolCalls, usage: usage);
   }
 
   List<Map<String, dynamic>> _buildMessages(
