@@ -2,6 +2,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/database_service.dart' as dbs;
 import '../services/proactive_service.dart';
 
@@ -34,6 +35,11 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
   Future<void> _toggle(bool v) async {
     setState(() => _proactiveEnabled = v);
     if (v) {
+      // Android 13+ notification permission — required for proactive messages
+      final notif = await Permission.notification.status;
+      if (notif.isDenied || notif.isPermanentlyDenied) {
+        await Permission.notification.request();
+      }
       await startProactive(intervalMinutes: _intervalMinutes.round());
     } else {
       await stopProactive();
