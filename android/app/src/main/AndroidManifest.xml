@@ -1,5 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Network (required for API calls) -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -20,10 +19,6 @@
 
     <!-- Notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <!-- Foreground Service (required for background service) -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- Voice (Phases 3+5) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -84,13 +79,6 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
-
-        <!-- flutter_background_service — required for Android 14+ foregroundServiceType -->
-        <service
-            android:name="id.flutter.flutter_background_service.BackgroundService"
-            android:foregroundServiceType="dataSync"
-            android:exported="true"
-            tools:replace="android:foregroundServiceType" />
         
         <meta-data
             android:name="flutterEmbedding"
