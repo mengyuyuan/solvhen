@@ -10,6 +10,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'api_service.dart';
 import 'database_service.dart';
 import 'tool_executor.dart';
@@ -34,6 +35,9 @@ Future<void> startProactive({required int intervalMinutes}) async {
     ongoing: true,
   );
 
+  // 保持 CPU 唤醒 — Timer 才不会停
+  await WakelockPlus.enable();
+
   _scheduleTick(clamped);
   // 首次 tick 立即执行
   await _tick();
@@ -45,6 +49,7 @@ Future<void> stopProactive() async {
   await DB.setConfig('proactive_enabled', 'false');
   _cancelTimer();
   await NotificationService().cancel(_keeperId);
+  await WakelockPlus.disable();
   debugPrint('[Proactive] stopped');
 }
 
