@@ -8,7 +8,6 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:workmanager/workmanager.dart';
 import 'screens/chat_screen.dart';
 import 'theme/theme_provider.dart';
 import 'services/notification_service.dart';
@@ -68,24 +67,21 @@ class _CompanionAppState extends State<CompanionApp> {
   }
   
   Future<void> _initAsync() async {
-    // 初始化 WorkManager（必须在任何 register 调用之前）
-    await Workmanager().initialize(proactiveCallbackDispatcher);
     await NotificationService().init();
     VoiceService().init();
     _initOneBot();
-    // 如果之前开启了，恢复 WorkManager 任务
     final cfg = await DB.getConfig();
     if (cfg['proactive_enabled'] == 'true') {
       final mins = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
       await startProactive(intervalMinutes: mins);
     }
 
-    // 启动时静默检查更新（不弹窗，只在设置页显示）
+    // 启动时静默检查更新
     final updateUrl = cfg['update_url'] ?? 'https://ota.sywy.app';
     try {
       final info = await checkForUpdate(
         updateUrl: updateUrl,
-        currentVersionCode: 2, // sync with pubspec version
+        currentVersionCode: 3,
       );
       if (info != null) {
         debugPrint('[Update] new version available: ${info.version}');
