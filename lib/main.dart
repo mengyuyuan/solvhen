@@ -69,7 +69,12 @@ class _CompanionAppState extends State<CompanionApp> {
     await NotificationService().init();
     VoiceService().init();
     _initOneBot();
-    await ProactiveService().start();
+    // 如果之前开启了，恢复 WorkManager 任务
+    final cfg = await DB.getConfig();
+    if (cfg['proactive_enabled'] == 'true') {
+      final mins = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
+      await startProactive(intervalMinutes: mins);
+    }
   }
 
   @override

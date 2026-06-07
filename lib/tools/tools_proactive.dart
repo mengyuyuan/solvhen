@@ -15,11 +15,11 @@ void registerProactiveTools() {
     toolset: 'system',
     schema: {
       'name': 'set_proactive',
-      'description': '设置主动消息间隔。Solvhen 会定时主动发消息给用户（通过系统通知）。设为0关闭。最少1分钟。',
+      'description': '设置主动消息间隔。Solvhen 会定时主动发消息给用户。设为0关闭。最少15分钟。',
       'parameters': {
         'type': 'object',
         'properties': {
-          'minutes': {'type': 'integer', 'description': '间隔分钟数，0=关闭，最少1'},
+          'minutes': {'type': 'integer', 'description': '间隔分钟数，0=关闭，最少15'},
         },
       },
     },
@@ -27,13 +27,11 @@ void registerProactiveTools() {
       final minutes = (args['minutes'] as num?)?.toInt() ?? 0;
       if (minutes <= 0) {
         await dbs.DB.setConfig('proactive_enabled', 'false');
-        await ProactiveService().stop();
+        await stopProactive();
         return jsonEncode({'enabled': false});
       }
-      final clamped = minutes.clamp(1, 1440);
-      await dbs.DB.setConfig('proactive_enabled', 'true');
-      await dbs.DB.setConfig('proactive_interval', clamped.toString());
-      await ProactiveService().start();
+      final clamped = minutes.clamp(15, 1440);
+      await startProactive(intervalMinutes: clamped);
       return jsonEncode({'enabled': true, 'interval': clamped});
     },
   ));
@@ -43,17 +41,17 @@ void registerProactiveTools() {
     toolset: 'system',
     schema: {
       'name': 'test_proactive',
-      'description': '立即发送一条测试主动消息（不等待定时器）',
+      'description': '立即发送一条测试主动消息',
       'parameters': {'type': 'object', 'properties': {}},
     },
     handler: (args) async {
       try {
         await NotificationService().show(
           title: 'Solvhen',
-          body: '这是一条测试主动消息。定时器正常运行中。',
-          payload: 'test_proactive',
+          body: '这是一条测试主动消息。后台定时器正常。',
+          payload: jsonEncode({'action': 'test'}),
         );
-        return jsonEncode({'sent': true, 'note': '检查通知栏和应用内弹窗'});
+        return jsonEncode({'sent': true});
       } catch (e) {
         return jsonEncode({'sent': false, 'error': e.toString()});
       }
@@ -73,7 +71,7 @@ void registerProactiveTools() {
       return jsonEncode({
         'enabled': cfg['proactive_enabled'] == 'true',
         'interval_minutes': int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30,
-        'running': ProactiveService().isRunning,
+        'note': 'WorkManager 后台任务，最小15分钟，出应用也能运行',
       });
     },
   ));

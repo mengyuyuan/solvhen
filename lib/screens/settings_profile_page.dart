@@ -1,4 +1,4 @@
-/// Solvhen — 个人设置页面：主动消息开关 + 间隔 + 其他个人偏好
+/// Solvhen — 个人设置页面：主动消息开关 + 间隔（WorkManager后台，最低15分钟）
 library;
 
 import 'package:flutter/material.dart';
@@ -26,29 +26,27 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
     final cfg = await dbs.DB.getConfig();
     setState(() {
       _proactiveEnabled = cfg['proactive_enabled'] == 'true';
-      _intervalMinutes = double.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
+      _intervalMinutes = (double.tryParse(cfg['proactive_interval'] ?? '30') ?? 30).clamp(15, 1440);
       _loading = false;
     });
   }
 
   Future<void> _toggle(bool v) async {
     setState(() => _proactiveEnabled = v);
-    await dbs.DB.setConfig('proactive_enabled', v ? 'true' : 'false');
     if (v) {
-      await dbs.DB.setConfig('proactive_interval', _intervalMinutes.round().toString());
-      await ProactiveService().start();
+      await startProactive(intervalMinutes: _intervalMinutes.round());
     } else {
-      await ProactiveService().stop();
+      await stopProactive();
     }
   }
 
   Future<void> _setInterval(double v) async {
-    final minutes = v.round().clamp(1, 1440);
+    final minutes = v.round().clamp(15, 1440);
     setState(() => _intervalMinutes = minutes.toDouble());
-    await dbs.DB.setConfig('proactive_interval', minutes.toString());
     if (_proactiveEnabled) {
-      await ProactiveService().stop();
-      await ProactiveService().start();
+      await startProactive(intervalMinutes: minutes);
+    } else {
+      await dbs.DB.setConfig('proactive_interval', minutes.toString());
     }
   }
 
@@ -62,16 +60,13 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final c = Theme.of(context).brightness == Brightness.dark
-        ? const Color(0xFFF2F2F7) : const Color(0xFF1C1C1E);
-    final cs = Theme.of(context).brightness == Brightness.dark
-        ? const Color(0xFF98989E) : const Color(0xFF6E6E73);
-    final cardBg = Theme.of(context).brightness == Brightness.dark
-        ? const Color(0xFF1C1C1E) : Colors.white;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final c = dark ? const Color(0xFFF2F2F7) : const Color(0xFF1C1C1E);
+    final cs = dark ? const Color(0xFF98989E) : const Color(0xFF6E6E73);
+    final cardBg = dark ? const Color(0xFF1C1C1E) : Colors.white;
 
     return Scaffold(
-      backgroundColor: Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xFF0D0D12) : const Color(0xFFF2F2F7),
+      backgroundColor: dark ? const Color(0xFF0D0D12) : const Color(0xFFF2F2F7),
       appBar: AppBar(
         title: const Text('个人设置'),
         backgroundColor: Colors.transparent,
@@ -82,7 +77,6 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // ── 主动消息 ──
                 Container(
                   decoration: BoxDecoration(
                     color: cardBg,
@@ -92,7 +86,6 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Header
                       Row(children: [
                         Icon(Icons.notifications_active_rounded, size: 22, color: c),
                         const SizedBox(width: 10),
@@ -106,11 +99,9 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
                       ]),
                       const SizedBox(height: 4),
                       Text(
-                        '开启后 Solvhen 会定时主动发消息给你',
+                        'WorkManager 后台任务，出应用也能运行。最低15分钟。',
                         style: TextStyle(fontSize: 13, color: cs),
                       ),
-
-                      // Interval slider (only when enabled)
                       if (_proactiveEnabled) ...[
                         const SizedBox(height: 20),
                         Row(children: [
@@ -131,33 +122,39 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
                         const SizedBox(height: 8),
                         Slider(
                           value: _intervalMinutes,
-                          min: 1,
+                          min: 15,
                           max: 240,
-                          divisions: 239,
+                          divisions: 225,
                           activeColor: const Color(0xFF4dc9f6),
-                          onChanged: _setInterval,
+                          onChanged: (v) => setState(() => _intervalMinutes = v),
+                          onChangeEnd: _setInterval,
                         ),
                         Row(children: [
-                          Text('1分', style: TextStyle(fontSize: 11, color: cs)),
+                          Text('15分', style: TextStyle(fontSize: 11, color: cs)),
                           const Spacer(),
                           Text('4小时', style: TextStyle(fontSize: 11, color: cs)),
                         ]),
                         const SizedBox(height: 12),
-                        // Status indicator
-                        Row(children: [
-                          Container(
-                            width: 8, height: 8,
-                            decoration: BoxDecoration(
-                              color: ProactiveService().isRunning ? const Color(0xFF34C759) : const Color(0xFFFF9500),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            ProactiveService().isRunning ? '运行中' : '等待启动…',
-                            style: TextStyle(fontSize: 13, color: cs),
-                          ),
-                        ]),
+                        FutureBuilder<bool>(
+                          future: isProactiveRunning(),
+                          builder: (_, snap) {
+                            final running = snap.data ?? false;
+                            return Row(children: [
+                              Container(
+                                width: 8, height: 8,
+                                decoration: BoxDecoration(
+                                  color: running ? const Color(0xFF34C759) : const Color(0xFFFF9500),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                running ? '运行中（WorkManager）' : '等待启动…',
+                                style: TextStyle(fontSize: 13, color: cs),
+                              ),
+                            ]);
+                          },
+                        ),
                       ],
                     ],
                   ),

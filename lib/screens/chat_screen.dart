@@ -41,7 +41,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final Map<int, int> _typewriterIdx = {};
   final Set<int> _expandedTools = {};
 
-  // Push notification overlay
   PushEvent? _pushEvent;
   StreamSubscription<PushEvent>? _pushSub;
 
@@ -324,14 +323,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Scaffold(
       backgroundColor: c.bgRoot,
       extendBodyBehindAppBar: false,
+      drawer: _buildDrawer(s, c),
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.menu, size: 22),
           color: c.textSecondary,
-          onPressed: () => setState(() => _drawerOpen = !_drawerOpen),
+          onPressed: () => Scaffold.of(context).openDrawer(),
         ),
         title: GestureDetector(
-          onTap: () => setState(() => _drawerOpen = !_drawerOpen),
+          onTap: () => Scaffold.of(context).openDrawer(),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -399,7 +399,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           statusText: s.agentToolStatus.isNotEmpty ? s.agentToolStatus : null,
           sendStartedAt: s.sendStartedAt,
         ),
-        if (_drawerOpen) _buildDrawer(s, c),
         Expanded(child: _buildMessages(s, c)),
         if (_showSuggestions) _buildSuggestions(c),
       ],
@@ -596,46 +595,49 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   // ═══════════════════════════════════════
 
   Widget _buildDrawer(ChatState s, ThemeColors c) {
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 280),
-      decoration: BoxDecoration(
-        color: c.bgCardSolid,
-        border: Border(bottom: BorderSide(color: c.separator, width: 0.5)),
-        boxShadow: c.shadowSm,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // New conversation button
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: SizedBox(
+    return Drawer(
+      backgroundColor: c.bgRoot,
+      child: SafeArea(
+        child: Column(
+          children: [
+            // Header
+            Container(
               width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  final conv = await DB.createConversation();
-                  await ref.read(chatProvider.notifier).switchConversation(conv.id!);
-                  await _loadConversations();
-                  setState(() => _drawerOpen = false);
-                },
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('新对话'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: c.accent,
-                  side: BorderSide(color: c.accent.withValues(alpha: 0.3)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              child: Text('对话列表', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textPrimary)),
+            ),
+            // New conversation button
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final conv = await DB.createConversation();
+                    await ref.read(chatProvider.notifier).switchConversation(conv.id!);
+                    await _loadConversations();
+                    if (mounted) Navigator.pop(context);
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('新对话'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: c.accent,
+                    side: BorderSide(color: c.accent.withValues(alpha: 0.3)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                 ),
               ),
             ),
-          ),
-          Divider(height: 1, color: c.separator),
-          // Conversation list
-          Flexible(
-            child: ListView.builder(
-              shrinkWrap: true,
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: _conversations.length,
-              itemBuilder: (_, i) {
+            const SizedBox(height: 8),
+            Divider(height: 1, color: c.separator),
+            // Conversation list
+            Expanded(
+              child: _conversations.isEmpty
+                  ? Center(child: Text('暂无对话', style: TextStyle(color: c.textTertiary)))
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      itemCount: _conversations.length,
+                      itemBuilder: (_, i) {
                 final conv = _conversations[i];
                 final isActive = conv.id == s.conversationId;
                 return ListTile(
@@ -696,7 +698,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     if (conv.id != null && conv.id != s.conversationId) {
                       await ref.read(chatProvider.notifier).switchConversation(conv.id!);
                     }
-                    setState(() => _drawerOpen = false);
+                    Navigator.pop(context); // close drawer
                   },
                 );
               },
@@ -704,10 +706,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
-  // ═══════════════════════════════════════
+// ═══════════════════════════════════════
   // MESSAGES
   // ═══════════════════════════════════════
 

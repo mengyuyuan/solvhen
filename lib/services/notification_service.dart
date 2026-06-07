@@ -8,10 +8,12 @@ library;
 /// Uses flutter_local_notifications for Android system notifications.
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'database_service.dart';
 
 class PushEvent {
   final String title;
@@ -74,6 +76,14 @@ class NotificationService {
 
   void _onTap(NotificationResponse response) {
     debugPrint('[NotificationService] tapped: ${response.payload}');
+    try {
+      final data = jsonDecode(response.payload ?? '{}');
+      if (data['action'] == 'open_conv' && data['convId'] != null) {
+        final convId = data['convId'] as int;
+        // 设置活跃对话——下次打开 ChatScreen 会加载这个对话
+        DB.setActiveConversation(convId);
+      }
+    } catch (_) {}
   }
 
   /// Show a system notification. Also emits to the in-app overlay stream.
