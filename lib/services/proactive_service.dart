@@ -153,7 +153,7 @@ Future<void> startProactive({required int intervalMinutes}) async {
   await service.configure(
     androidConfiguration: AndroidConfiguration(
       onStart: onBackgroundStart,
-      autoStart: true,
+      autoStart: false,
       isForegroundMode: true,
       notificationChannelId: _channelId,
       initialNotificationTitle: 'Solvhen',
