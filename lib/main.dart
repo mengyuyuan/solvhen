@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:workmanager/workmanager.dart';
 import 'screens/chat_screen.dart';
 import 'theme/theme_provider.dart';
 import 'services/notification_service.dart';
@@ -66,6 +67,8 @@ class _CompanionAppState extends State<CompanionApp> {
   }
   
   Future<void> _initAsync() async {
+    // 初始化 WorkManager（必须在任何 register 调用之前）
+    await Workmanager().initialize(proactiveCallbackDispatcher);
     await NotificationService().init();
     VoiceService().init();
     _initOneBot();

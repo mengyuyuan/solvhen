@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════
 // Solvhen — AI手机智能体 | 世于我愿
-// 主动消息服务 — Dart Timer + 前台通知保活
+// 主动消息服务 — Timer + WorkManager 双保险
+// Timer: 即时响应 (1-14min), WorkManager: 兜底保活 (15min)
 // ═══════════════════════════════════════════════════════════════
 
 library;
@@ -9,100 +10,53 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:workmanager/workmanager.dart';
 import 'api_service.dart';
 import 'database_service.dart';
 import 'tool_executor.dart';
 import '../services/notification_service.dart';
 
 const _keeperId = 999;
-
-/// 启动主动消息
-Future<void> startProactive({required int intervalMinutes}) async {
-  final clamped = intervalMinutes.clamp(1, 1440);
-  await DB.setConfig('proactive_enabled', 'true');
-  await DB.setConfig('proactive_interval', clamped.toString());
-
-  // 更新常驻通知（先取消旧的再发新的，确保文字更新）
-  await NotificationService().cancel(_keeperId);
-  await NotificationService().show(
-    id: _keeperId,
-    title: 'Solvhen',
-    body: '主动消息运行中（每${clamped}分钟）',
-    payload: 'proactive_keeper',
-    ongoing: true,
-  );
-
-  _scheduleTick(clamped);
-  // 首次 tick 不延迟
-  await _tick();
-  debugPrint('[Proactive] started, interval: ${clamped}min');
-}
-
-/// 停止
-Future<void> stopProactive() async {
-  await DB.setConfig('proactive_enabled', 'false');
-  _cancelTimer();
-  await NotificationService().cancel(_keeperId);
-}
-
-Future<bool> isProactiveRunning() async {
-  final cfg = await DB.getConfig();
-  return cfg['proactive_enabled'] == 'true';
-}
+const _wmTaskName = 'proactive_tick';
 
 // ═══════════════════════════════════════
-// Timer（防竞态）
+// WorkManager 后台回调 —— 兜底保活
 // ═══════════════════════════════════════
 
-Timer? _timer;
-bool _ticking = false; // 并发锁
-
-void _scheduleTick(int minutes) {
-  _timer?.cancel();
-  _timer = Timer(Duration(minutes: minutes), () async {
-    debugPrint('[Proactive] timer fired, scheduling next...');
-    await _tick();
-    // 始终重调度——_tick()内部判断是否该跳过
-    final cfg = await DB.getConfig();
-    final m = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
-    _scheduleTick(m.clamp(1, 1440));
+@pragma('vm:entry-point')
+void proactiveCallbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    if (task == _wmTaskName) {
+      return await runProactiveTick();
+    }
+    return false;
   });
 }
 
-void _cancelTimer() {
-  _timer?.cancel();
-  _timer = null;
-}
-
-// ═══════════════════════════════════════
-// Tick
-// ═══════════════════════════════════════
-
-Future<void> _tick() async {
-  if (_ticking) return;
+/// 公开的 tick 入口——Timer 和 WorkManager 都走这里
+Future<bool> runProactiveTick() async {
+  if (_ticking) return true; // 已在执行中，跳过
   _ticking = true;
   try {
     final now = DateTime.now();
 
-    // 已关闭则跳过
     final cfg = await DB.getConfig();
     if (cfg['proactive_enabled'] != 'true') {
       debugPrint('[Proactive] disabled, skipping tick');
-      return;
+      return true;
     }
-    // 冲突检测：用户最近5分钟有活动则跳过
+
+    // 冲突检测
     final lastActivity = cfg['last_activity_at'];
     if (lastActivity != null) {
       final lastTime = DateTime.tryParse(lastActivity);
       if (lastTime != null && now.difference(lastTime).inMinutes < 2) {
         debugPrint('[Proactive] skipped — user active recently');
-        return;
+        return true;
       }
     }
 
     final api = ApiService();
-
-    // P0修复: 用 rootBundle 读 asset 文件（不用 dart:io File）
     final personality = await _loadPersonality();
     final memText = await _loadMemories();
     final chatText = await _loadRecentChat();
@@ -127,13 +81,11 @@ $chatText
     ).timeout(const Duration(seconds: 20));
 
     final text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
-    if (text.isEmpty || text == '[SKIP]') return;
+    if (text.isEmpty || text == '[SKIP]') return true;
 
-    // 获取活跃对话
     final convId = await _getActiveConvId();
     await _saveMessage(convId, text);
 
-    // 通知 + in-app push（ChatScreen 监听刷新）
     await NotificationService().show(
       title: 'Solvhen',
       body: text,
@@ -141,15 +93,100 @@ $chatText
     );
 
     debugPrint('[Proactive] sent: $text -> conv $convId');
+    return true;
   } catch (e) {
     debugPrint('[Proactive] tick error: $e');
+    return false;
   } finally {
     _ticking = false;
   }
 }
 
 // ═══════════════════════════════════════
-// 辅助
+// Public API
+// ═══════════════════════════════════════
+
+Future<void> startProactive({required int intervalMinutes}) async {
+  final clamped = intervalMinutes.clamp(1, 1440);
+
+  // 持久化配置
+  await DB.setConfig('proactive_enabled', 'true');
+  await DB.setConfig('proactive_interval', clamped.toString());
+
+  // 前台通知
+  await NotificationService().cancel(_keeperId);
+  await NotificationService().show(
+    id: _keeperId,
+    title: 'Solvhen',
+    body: '主动消息运行中（每${clamped}分钟）',
+    payload: 'proactive_keeper',
+    ongoing: true,
+  );
+
+  // Timer — 即时响应
+  _scheduleTick(clamped);
+
+  // WorkManager — 兜底保活 (最小15分钟)
+  try {
+    await Workmanager().registerPeriodicTask(
+      _wmTaskName,
+      _wmTaskName,
+      frequency: const Duration(minutes: 15),
+      constraints: Constraints(networkType: NetworkType.connected),
+      existingWorkPolicy: ExistingWorkPolicy.replace,
+    );
+    debugPrint('[Proactive] WorkManager registered (15min fallback)');
+  } catch (e) {
+    debugPrint('[Proactive] WorkManager registration failed: $e');
+  }
+
+  // 首次 tick 不延迟
+  await runProactiveTick();
+  debugPrint('[Proactive] started, interval: ${clamped}min');
+}
+
+Future<void> stopProactive() async {
+  await DB.setConfig('proactive_enabled', 'false');
+  _cancelTimer();
+  await NotificationService().cancel(_keeperId);
+
+  try {
+    await Workmanager().cancelByUniqueName(_wmTaskName);
+    debugPrint('[Proactive] WorkManager cancelled');
+  } catch (_) {}
+}
+
+Future<bool> isProactiveRunning() async {
+  final cfg = await DB.getConfig();
+  return cfg['proactive_enabled'] == 'true';
+}
+
+// ═══════════════════════════════════════
+// Timer
+// ═══════════════════════════════════════
+
+Timer? _timer;
+bool _ticking = false;
+
+void _scheduleTick(int minutes) {
+  _timer?.cancel();
+  _timer = Timer(Duration(minutes: minutes), () async {
+    debugPrint('[Proactive] timer fired');
+    await runProactiveTick();
+    // 重调度
+    final cfg = await DB.getConfig();
+    final m = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
+    _scheduleTick(m.clamp(1, 1440));
+  });
+}
+
+void _cancelTimer() {
+  _timer?.cancel();
+  _timer = null;
+}
+
+// ═══════════════════════════════════════
+// Helpers
 // ═══════════════════════════════════════
 
 Future<String> _loadPersonality() async {
@@ -161,7 +198,7 @@ Future<String> _loadPersonality() async {
       try {
         final content = await rootBundle.loadString(path);
         buf.writeln(content);
-      } catch (_) { /* 某个文件不存在不影响其他 */ }
+      } catch (_) {}
     }
     if (buf.isNotEmpty) return buf.toString();
   } catch (_) {}
