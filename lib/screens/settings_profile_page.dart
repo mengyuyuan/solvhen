@@ -1,4 +1,4 @@
-/// Solvhen — 个人设置页面：主动消息开关 + 间隔（WorkManager后台，最低15分钟）
+/// Solvhen — 个人设置页面：主动消息开关 + 间隔
 library;
 
 import 'package:flutter/material.dart';
@@ -26,7 +26,7 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
     final cfg = await dbs.DB.getConfig();
     setState(() {
       _proactiveEnabled = cfg['proactive_enabled'] == 'true';
-      _intervalMinutes = (double.tryParse(cfg['proactive_interval'] ?? '30') ?? 30).clamp(15, 1440);
+      _intervalMinutes = (double.tryParse(cfg['proactive_interval'] ?? '30') ?? 30).clamp(1, 1440);
       _loading = false;
     });
   }
@@ -41,7 +41,7 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
   }
 
   Future<void> _setInterval(double v) async {
-    final minutes = v.round().clamp(15, 1440);
+    final minutes = v.round().clamp(1, 1440);
     setState(() => _intervalMinutes = minutes.toDouble());
     if (_proactiveEnabled) {
       await startProactive(intervalMinutes: minutes);
@@ -99,7 +99,7 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
                       ]),
                       const SizedBox(height: 4),
                       Text(
-                        'WorkManager 后台任务，出应用也能运行。最低15分钟。',
+                        '开启后 Solvhen 会定时主动发消息给你。最低1分钟。',
                         style: TextStyle(fontSize: 13, color: cs),
                       ),
                       if (_proactiveEnabled) ...[
@@ -122,15 +122,15 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
                         const SizedBox(height: 8),
                         Slider(
                           value: _intervalMinutes,
-                          min: 15,
+                          min: 1,
                           max: 240,
-                          divisions: 225,
+                          divisions: 239,
                           activeColor: const Color(0xFF4dc9f6),
                           onChanged: (v) => setState(() => _intervalMinutes = v),
                           onChangeEnd: _setInterval,
                         ),
                         Row(children: [
-                          Text('15分', style: TextStyle(fontSize: 11, color: cs)),
+                          Text('1分', style: TextStyle(fontSize: 11, color: cs)),
                           const Spacer(),
                           Text('4小时', style: TextStyle(fontSize: 11, color: cs)),
                         ]),

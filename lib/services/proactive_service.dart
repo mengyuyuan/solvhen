@@ -7,11 +7,10 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'api_service.dart';
 import 'database_service.dart';
-import 'prompt_builder.dart';
 import 'tool_executor.dart';
 import '../services/notification_service.dart';
 
@@ -23,7 +22,8 @@ Future<void> startProactive({required int intervalMinutes}) async {
   await DB.setConfig('proactive_enabled', 'true');
   await DB.setConfig('proactive_interval', clamped.toString());
 
-  // 前台常驻通知
+  // 更新常驻通知（先取消旧的再发新的，确保文字更新）
+  await NotificationService().cancel(_keeperId);
   await NotificationService().show(
     id: _keeperId,
     title: 'Solvhen',
@@ -33,7 +33,7 @@ Future<void> startProactive({required int intervalMinutes}) async {
   );
 
   _scheduleTick(clamped);
-  // 立即发第一条验证
+  // 首次 tick 不延迟
   await _tick();
   debugPrint('[Proactive] started, interval: ${clamped}min');
 }
@@ -51,20 +51,21 @@ Future<bool> isProactiveRunning() async {
 }
 
 // ═══════════════════════════════════════
-// Timer
+// Timer（防竞态）
 // ═══════════════════════════════════════
 
 Timer? _timer;
+bool _ticking = false; // 并发锁
 
 void _scheduleTick(int minutes) {
   _timer?.cancel();
   _timer = Timer(Duration(minutes: minutes), () async {
+    debugPrint('[Proactive] timer fired, scheduling next...');
     await _tick();
+    // 始终重调度——_tick()内部判断是否该跳过
     final cfg = await DB.getConfig();
-    if (cfg['proactive_enabled'] == 'true') {
-      final m = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
-      _scheduleTick(m.clamp(1, 1440));
-    }
+    final m = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
+    _scheduleTick(m.clamp(1, 1440));
   });
 }
 
@@ -78,15 +79,32 @@ void _cancelTimer() {
 // ═══════════════════════════════════════
 
 Future<void> _tick() async {
+  if (_ticking) return;
+  _ticking = true;
   try {
-    final api = ApiService();
     final now = DateTime.now();
 
-    // 人格（从文件加载）
+    // 已关闭则跳过
+    final cfg = await DB.getConfig();
+    if (cfg['proactive_enabled'] != 'true') {
+      debugPrint('[Proactive] disabled, skipping tick');
+      return;
+    }
+    // 冲突检测：用户最近5分钟有活动则跳过
+    final lastActivity = cfg['last_activity_at'];
+    if (lastActivity != null) {
+      final lastTime = DateTime.tryParse(lastActivity);
+      if (lastTime != null && now.difference(lastTime).inMinutes < 5) {
+        debugPrint('[Proactive] skipped — user active recently');
+        return;
+      }
+    }
+
+    final api = ApiService();
+
+    // P0修复: 用 rootBundle 读 asset 文件（不用 dart:io File）
     final personality = await _loadPersonality();
-    // 全局记忆
     final memText = await _loadMemories();
-    // 最近对话
     final chatText = await _loadRecentChat();
 
     final prompt = '''
@@ -105,7 +123,7 @@ $chatText
 请用你的人格说一句自然的话联系对方。控制在20字以内。22点后回复[SKIP]。''';
 
     final result = await api.chatStream(
-      systemPrompt: prompt, history: const [], userMessage: '',
+      systemPrompt: prompt, history: const [], userMessage: '（后台定时联系，请简短回复）',
     ).timeout(const Duration(seconds: 20));
 
     final text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
@@ -115,7 +133,7 @@ $chatText
     final convId = await _getActiveConvId();
     await _saveMessage(convId, text);
 
-    // 通知（带 convId 路由）
+    // 通知 + in-app push（ChatScreen 监听刷新）
     await NotificationService().show(
       title: 'Solvhen',
       body: text,
@@ -125,6 +143,8 @@ $chatText
     debugPrint('[Proactive] sent: $text -> conv $convId');
   } catch (e) {
     debugPrint('[Proactive] tick error: $e');
+  } finally {
+    _ticking = false;
   }
 }
 
@@ -138,8 +158,10 @@ Future<String> _loadPersonality() async {
     for (final path in ['assets/personality/base-identity.md',
                         'assets/personality/base-voice.md',
                         'assets/personality/base-constraints.md']) {
-      final f = File(path);
-      if (await f.exists()) buf.writeln(await f.readAsString());
+      try {
+        final content = await rootBundle.loadString(path);
+        buf.writeln(content);
+      } catch (_) { /* 某个文件不存在不影响其他 */ }
     }
     if (buf.isNotEmpty) return buf.toString();
   } catch (_) {}

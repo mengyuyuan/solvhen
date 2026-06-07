@@ -28,8 +28,8 @@ class VolcanoSTT {
     if (_loaded) return _appId != null && _token != null;
     try {
       final cfg = await DB.getConfig();
-      final appId = cfg['volcano_app_id'];
-      final token = cfg['volcano_token'];
+      _appId = cfg['volcano_app_id'];
+      _token = cfg['volcano_token'];
       _loaded = true;
       return _appId != null && _appId!.isNotEmpty &&
              _token != null && _token!.isNotEmpty;

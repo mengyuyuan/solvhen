@@ -68,10 +68,9 @@ class ToolExecutor {
   static List<ToolCall>? parseToolCallsFromContent(String content) {
     // Try standard XML first, then DSML
     var matches = _invokeRe.allMatches(content);
-    var paramBlockRe = _paramBlockRe;
+    final paramBlockRe = matches.isNotEmpty ? _paramBlockRe : _dsmlParamRe;
     if (matches.isEmpty) {
       matches = _dsmlInvokeRe.allMatches(content);
-      paramBlockRe = _dsmlParamRe;
     }
     if (kDebugMode) debugPrint('[PARSE-XML] content_len=${content.length} match_count=${matches.length} first20=${content.length > 20 ? content.substring(0, 20) : content}');
     if (matches.isEmpty) return null;
@@ -83,7 +82,7 @@ class ToolExecutor {
       final body = m.group(2)!;
       final params = <String, dynamic>{};
       // Two-pass: extract param blocks, then parse name from opening tag
-      for (final pm in _paramBlockRe.allMatches(body)) {
+      for (final pm in paramBlockRe.allMatches(body)) {
         final tag = pm.group(0)!; // full <parameter ...>...</parameter>
         final nameMatch = _nameRe.firstMatch(tag);
         if (nameMatch == null) continue;

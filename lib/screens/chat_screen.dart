@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -36,13 +37,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   List<CommandDef> _suggestions = [];
   bool _showSuggestions = false;
   List<Conversation> _conversations = [];
-  bool _drawerOpen = false;
   int? _lastConvId;
   final Map<int, int> _typewriterIdx = {};
   final Set<int> _expandedTools = {};
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
   PushEvent? _pushEvent;
   StreamSubscription<PushEvent>? _pushSub;
+  int? _pendingProactiveConvId; // 待切换的主动消息对话
 
   // Voice mode
   bool _voiceMode = false;
@@ -57,7 +59,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.initState();
     _loadConversations();
     _pushSub = NotificationService().onPush.listen((event) {
-      if (mounted) setState(() => _pushEvent = event);
+      if (!mounted) return;
+      try {
+        final data = jsonDecode(event.payload ?? '{}');
+        if (data['action'] == 'open_conv') {
+          final convId = data['convId'] as int;
+          _loadConversations();
+          final s = ref.read(chatProvider);
+          if (s.conversationId == convId) {
+            ref.read(chatProvider.notifier).refreshFromDB();
+          } else {
+            // 延迟到下一帧切换，避免 build 期间修改状态
+            _pendingProactiveConvId = convId;
+            if (mounted) setState(() {});
+          }
+          return;
+        }
+      } catch (_) {}
+      setState(() => _pushEvent = event);
     });
     _stt.initialize().then((ok) { if (mounted) setState(() => _sttReady = ok); });
 
@@ -299,6 +318,18 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 处理待切换的主动消息对话（延迟到 build 后的下一帧）
+    if (_pendingProactiveConvId != null) {
+      final pendingId = _pendingProactiveConvId!;
+      _pendingProactiveConvId = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(chatProvider.notifier).switchConversation(pendingId);
+          _loadConversations();
+        }
+      });
+    }
+
     // Watch for rebuild triggers. Variables intentionally unused — the watch
     // itself registers rebuild dependencies; the read snapshot is in `s` below.
     ref.watch(chatProvider.select((s) => s.messages));
@@ -321,6 +352,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: c.bgRoot,
       extendBodyBehindAppBar: false,
       drawer: _buildDrawer(s, c),
@@ -328,10 +360,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         leading: IconButton(
           icon: const Icon(Icons.menu, size: 22),
           color: c.textSecondary,
-          onPressed: () => Scaffold.of(context).openDrawer(),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
         title: GestureDetector(
-          onTap: () => Scaffold.of(context).openDrawer(),
+          onTap: () => _scaffoldKey.currentState?.openDrawer(),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

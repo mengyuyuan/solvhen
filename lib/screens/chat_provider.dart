@@ -233,7 +233,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final db = await DB.database;
     await db.insert('messages', userMsg.toMap());
     await DB.touchConversation(convId);
-    await DB.setActiveConversation(convId); // 持久化当前对话，防止杀进程后丢失
+    await DB.setActiveConversation(convId);
+    await DB.setConfig('last_activity_at', DateTime.now().toIso8601String()); // 主动消息冲突检测
 
     final historyBefore = List<Message>.from(state.messages);
     _setState(AgentState.thinking);

@@ -15,11 +15,11 @@ void registerProactiveTools() {
     toolset: 'system',
     schema: {
       'name': 'set_proactive',
-      'description': '设置主动消息间隔。Solvhen 会定时主动发消息给用户。设为0关闭。最少15分钟。',
+      'description': '设置主动消息间隔。设为0关闭。最少1分钟。',
       'parameters': {
         'type': 'object',
         'properties': {
-          'minutes': {'type': 'integer', 'description': '间隔分钟数，0=关闭，最少15'},
+          'minutes': {'type': 'integer', 'description': '间隔分钟数，0=关闭，最少1'},
         },
       },
     },
@@ -30,7 +30,7 @@ void registerProactiveTools() {
         await stopProactive();
         return jsonEncode({'enabled': false});
       }
-      final clamped = minutes.clamp(15, 1440);
+      final clamped = minutes.clamp(1, 1440);
       await startProactive(intervalMinutes: clamped);
       return jsonEncode({'enabled': true, 'interval': clamped});
     },
@@ -71,7 +71,7 @@ void registerProactiveTools() {
       return jsonEncode({
         'enabled': cfg['proactive_enabled'] == 'true',
         'interval_minutes': int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30,
-        'note': 'WorkManager 后台任务，最小15分钟，出应用也能运行',
+        'note': '定时主动发消息，最低1分钟',
       });
     },
   ));
