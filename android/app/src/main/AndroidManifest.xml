@@ -83,6 +83,12 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- flutter_background_service — required for Android 14+ foregroundServiceType -->
+        <service
+            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
         
         <meta-data
             android:name="flutterEmbedding"
