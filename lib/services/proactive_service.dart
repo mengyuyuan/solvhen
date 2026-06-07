@@ -16,7 +16,7 @@ import 'database_service.dart';
 import 'tool_executor.dart';
 import '../services/notification_service.dart';
 
-const _channelId = 'solvhen_proactive';
+const _channelId = 'solvhen_messages';
 const _notifId = 999;
 const _bgServiceKey = 'solvhen_bg';
 
