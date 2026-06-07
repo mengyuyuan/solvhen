@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // Solvhen — AI手机智能体 | 世于我愿
-// 主动消息服务 — 前台常驻保活 + Timer + 人格 + 记忆 + 对话同步
+// 主动消息服务 — flutter_background_service 前台Service，杀不死
 // ═══════════════════════════════════════════════════════════════
 
 library;
@@ -9,105 +9,69 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/widgets.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
 import 'api_service.dart';
 import 'database_service.dart';
 import 'tool_executor.dart';
 import '../services/notification_service.dart';
 
-const _keeperId = 999;
-
-/// 启动主动消息
-Future<void> startProactive({required int intervalMinutes}) async {
-  final clamped = intervalMinutes.clamp(1, 1440);
-  await DB.setConfig('proactive_enabled', 'true');
-  await DB.setConfig('proactive_interval', clamped.toString());
-
-  // 更新常驻通知（先取消旧的再发新的，确保文字更新）
-  await NotificationService().cancel(_keeperId);
-  await NotificationService().show(
-    id: _keeperId,
-    title: 'Solvhen',
-    body: '主动消息运行中（每${clamped}分钟）',
-    payload: 'proactive_keeper',
-    ongoing: true,
-  );
-
-  _scheduleTick(clamped);
-  // 首次 tick 不延迟
-  await _tick();
-  debugPrint('[Proactive] started, interval: ${clamped}min');
-}
-
-/// 停止
-Future<void> stopProactive() async {
-  await DB.setConfig('proactive_enabled', 'false');
-  _cancelTimer();
-  await NotificationService().cancel(_keeperId);
-}
-
-Future<bool> isProactiveRunning() async {
-  final cfg = await DB.getConfig();
-  return cfg['proactive_enabled'] == 'true';
-}
+const _channelId = 'solvhen_proactive';
+const _notifId = 999;
+const _bgServiceKey = 'solvhen_bg';
 
 // ═══════════════════════════════════════
-// Timer（防竞态）
+// 后台入口 —— @pragma 标记防止 tree-shaking
 // ═══════════════════════════════════════
 
-Timer? _timer;
-bool _ticking = false; // 并发锁
+@pragma('vm:entry-point')
+void onBackgroundStart(ServiceInstance service) async {
+  WidgetsFlutterBinding.ensureInitialized();
 
-void _scheduleTick(int minutes) {
-  _timer?.cancel();
-  _timer = Timer(Duration(minutes: minutes), () async {
-    debugPrint('[Proactive] timer fired, scheduling next...');
-    await _tick();
-    // 始终重调度——_tick()内部判断是否该跳过
+  // Init DB + notification in background isolate
+  await NotificationService().init();
+  await DB.database; // warmup — ensure DB is ready
+
+  Timer? _tickTimer;
+  bool _ticking = false;
+
+  // Load interval from config
+  Future<int> _loadInterval() async {
     final cfg = await DB.getConfig();
-    final m = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
-    _scheduleTick(m.clamp(1, 1440));
-  });
-}
+    return (int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30).clamp(1, 1440);
+  }
 
-void _cancelTimer() {
-  _timer?.cancel();
-  _timer = null;
-}
+  // The tick logic — same as before but runs in background
+  Future<void> _tick() async {
+    if (_ticking) return;
+    _ticking = true;
+    try {
+      final now = DateTime.now();
 
-// ═══════════════════════════════════════
-// Tick
-// ═══════════════════════════════════════
-
-Future<void> _tick() async {
-  if (_ticking) return;
-  _ticking = true;
-  try {
-    final now = DateTime.now();
-
-    // 已关闭则跳过
-    final cfg = await DB.getConfig();
-    if (cfg['proactive_enabled'] != 'true') {
-      debugPrint('[Proactive] disabled, skipping tick');
-      return;
-    }
-    // 冲突检测：用户最近5分钟有活动则跳过
-    final lastActivity = cfg['last_activity_at'];
-    if (lastActivity != null) {
-      final lastTime = DateTime.tryParse(lastActivity);
-      if (lastTime != null && now.difference(lastTime).inMinutes < 5) {
-        debugPrint('[Proactive] skipped — user active recently');
+      final cfg = await DB.getConfig();
+      if (cfg['proactive_enabled'] != 'true') {
+        debugPrint('[BG-Proactive] disabled, skipping');
         return;
       }
-    }
 
-    final api = ApiService();
+      // Conflict: skip if user active in last 5 min
+      final lastActivity = cfg['last_activity_at'];
+      if (lastActivity != null) {
+        final lastTime = DateTime.tryParse(lastActivity);
+        if (lastTime != null && now.difference(lastTime).inMinutes < 5) {
+          debugPrint('[BG-Proactive] skipped — user active');
+          return;
+        }
+      }
 
-    // P0修复: 用 rootBundle 读 asset 文件（不用 dart:io File）
-    final personality = await _loadPersonality();
-    final memText = await _loadMemories();
-    final chatText = await _loadRecentChat();
+      final api = ApiService();
 
-    final prompt = '''
+      // Load personality from assets
+      final personality = await _loadPersonality();
+      final memText = await _loadMemories();
+      final chatText = await _loadRecentChat();
+
+      final prompt = '''
 $personality
 
 [系统指令：现在是主动消息模式]
@@ -122,34 +86,124 @@ $chatText
 
 请用你的人格说一句自然的话联系对方。控制在20字以内。22点后回复[SKIP]。''';
 
-    final result = await api.chatStream(
-      systemPrompt: prompt, history: const [], userMessage: '（后台定时联系，请简短回复）',
-    ).timeout(const Duration(seconds: 20));
+      final result = await api.chatStream(
+        systemPrompt: prompt, history: const [], userMessage: '（后台定时联系，请简短回复）',
+      ).timeout(const Duration(seconds: 20));
 
-    final text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
-    if (text.isEmpty || text == '[SKIP]') return;
+      final text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
+      if (text.isEmpty || text == '[SKIP]') return;
 
-    // 获取活跃对话
-    final convId = await _getActiveConvId();
-    await _saveMessage(convId, text);
+      final convId = await _getActiveConvId();
+      await _saveMessage(convId, text);
 
-    // 通知 + in-app push（ChatScreen 监听刷新）
-    await NotificationService().show(
-      title: 'Solvhen',
-      body: text,
-      payload: jsonEncode({'action': 'open_conv', 'convId': convId}),
-    );
+      await NotificationService().show(
+        title: 'Solvhen',
+        body: text,
+        payload: jsonEncode({'action': 'open_conv', 'convId': convId}),
+      );
 
-    debugPrint('[Proactive] sent: $text -> conv $convId');
-  } catch (e) {
-    debugPrint('[Proactive] tick error: $e');
-  } finally {
-    _ticking = false;
+      // Update foreground notification text
+      service.setForegroundNotificationInfo(
+        title: 'Solvhen',
+        content: '最后消息: ${text.length > 20 ? '${text.substring(0, 20)}…' : text}',
+      );
+
+      debugPrint('[BG-Proactive] sent: $text -> conv $convId');
+    } catch (e) {
+      debugPrint('[BG-Proactive] tick error: $e');
+    } finally {
+      _ticking = false;
+    }
   }
+
+  // Schedule tick with current interval
+  void _scheduleTick(int minutes) {
+    _tickTimer?.cancel();
+    _tickTimer = Timer(Duration(minutes: minutes), () async {
+      await _tick();
+      final m = await _loadInterval();
+      _scheduleTick(m);
+    });
+  }
+
+  // Listen for interval changes from main isolate
+  service.on('setInterval').listen((event) {
+    final m = (event?['interval'] as int?)?.clamp(1, 1440) ?? 30;
+    debugPrint('[BG-Proactive] interval changed to ${m}min');
+    _scheduleTick(m);
+  });
+
+  // Start the tick loop
+  final initialInterval = await _loadInterval();
+  _scheduleTick(initialInterval);
+  // First tick immediately
+  await _tick();
+
+  debugPrint('[BG-Proactive] service started, interval=${initialInterval}min');
 }
 
 // ═══════════════════════════════════════
-// 辅助
+// Public API — called from main isolate
+// ═══════════════════════════════════════
+
+/// Start proactive messaging via background service.
+Future<void> startProactive({required int intervalMinutes}) async {
+  final clamped = intervalMinutes.clamp(1, 1440);
+  await DB.setConfig('proactive_enabled', 'true');
+  await DB.setConfig('proactive_interval', clamped.toString());
+
+  final service = FlutterBackgroundService();
+
+  // Configure once (idempotent)
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onBackgroundStart,
+      autoStart: true,
+      isForegroundMode: true,
+      notificationChannelId: _channelId,
+      initialNotificationTitle: 'Solvhen',
+      initialNotificationContent: '主动消息运行中（每$clamped分钟）',
+      foregroundServiceNotificationId: _notifId,
+      foregroundServiceTypes: [AndroidForegroundType.dataSync],
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: false,
+      onForeground: onBackgroundStart,
+      onBackground: onBackgroundStart,
+    ),
+  );
+
+  // Start (or restart with new interval if already running)
+  final isRunning = await service.isRunning();
+  if (isRunning) {
+    // Already running — just tell it to change interval
+    service.invoke('setInterval', {'interval': clamped});
+  } else {
+    await service.startService();
+    // Wait a tick for the service to init, then send interval
+    await Future.delayed(const Duration(milliseconds: 500));
+    service.invoke('setInterval', {'interval': clamped});
+  }
+
+  debugPrint('[Proactive] started via bg service, interval: ${clamped}min');
+}
+
+/// Stop proactive messaging.
+Future<void> stopProactive() async {
+  await DB.setConfig('proactive_enabled', 'false');
+  final service = FlutterBackgroundService();
+  service.invoke('stopService');
+  debugPrint('[Proactive] stopped');
+}
+
+/// Check if proactive is enabled (reads config, not service state).
+Future<bool> isProactiveRunning() async {
+  final cfg = await DB.getConfig();
+  return cfg['proactive_enabled'] == 'true';
+}
+
+// ═══════════════════════════════════════
+// Helpers — duplicated in background entry point (top-level functions)
 // ═══════════════════════════════════════
 
 Future<String> _loadPersonality() async {
@@ -161,7 +215,7 @@ Future<String> _loadPersonality() async {
       try {
         final content = await rootBundle.loadString(path);
         buf.writeln(content);
-      } catch (_) { /* 某个文件不存在不影响其他 */ }
+      } catch (_) {}
     }
     if (buf.isNotEmpty) return buf.toString();
   } catch (_) {}
