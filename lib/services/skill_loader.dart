@@ -1,15 +1,22 @@
-/// Loads skill content from asset .md files into the SQLite skills table.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 技能加载器——从文件系统加载技能SKILL.md并注入prompt
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 /// Replaces the old approach of hardcoding skill text in database_service.dart.
 ///
 /// Skills are .md files with YAML frontmatter in assets/skills/.
 /// Frontmatter declares name + priority. The body is the skill content.
 ///
 /// Usage: call SkillLoader.sync() once at startup. Idempotent (uses INSERT OR REPLACE).
-library;
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'database_service.dart';
 
+/// 技能加载器——从assets/skills/目录加载SKILL.md并同步到DB
+/// 启动时自动sync，技能按priority排序注入system prompt
 class SkillLoader {
   /// Map of skill name → asset path. Add new skills here.
   /// The .md files live in assets/skills/ and must be declared in pubspec.yaml.

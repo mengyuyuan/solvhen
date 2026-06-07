@@ -1,6 +1,11 @@
-/// NotificationService — system notifications + in-app popup trigger.
-/// Uses flutter_local_notifications for Android system notifications.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 通知服务——Android本地推送通知
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
+/// Uses flutter_local_notifications for Android system notifications.
 
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -15,6 +20,7 @@ class PushEvent {
   const PushEvent({required this.title, required this.body, this.payload});
 }
 
+/// Android本地通知服务——单例，flutter_local_notifications封装
 class NotificationService {
   static final NotificationService _instance = NotificationService._();
   factory NotificationService() => _instance;

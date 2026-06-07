@@ -1,16 +1,22 @@
-/// Sub-agent execution engine — spawns isolated AI agents for parallel work.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 子代理服务——委派子任务给独立Agent执行
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 /// Architecture: same-process, separate context, configurable toolset.
 /// V2.1: prevent recursive delegation, add outer timeout, filter delegation toolset.
-library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'api_service.dart';
-import 'prompt_builder.dart';
 import 'tool_executor.dart';
 import '../tools/tool_registry.dart';
 import '../models/message.dart';
 
+/// 子代理服务——委派独立任务
+/// ⚠️ 子代理无父级记忆——需通过context传递全部必要信息
 class SubAgentConfig {
   final String goal;
   final String? context;
@@ -27,6 +33,8 @@ class SubAgentConfig {
   });
 }
 
+/// 子代理服务——委派独立任务
+/// ⚠️ 子代理无父级记忆——需通过context传递全部必要信息
 class SubAgentResult {
   final String goal;
   final String summary;
@@ -51,6 +59,8 @@ class SubAgentResult {
   };
 }
 
+/// 子代理服务——委派独立任务
+/// ⚠️ 子代理无父级记忆——需通过context传递全部必要信息
 class SubAgentRunner {
   static final SubAgentRunner _instance = SubAgentRunner._();
   factory SubAgentRunner() => _instance;

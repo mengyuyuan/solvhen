@@ -1,6 +1,12 @@
-/// PNG-based avatar for Solvhen v1.1.
-/// Uses 16 hand-crafted frames for eye direction + blink animation.
-/// Replaces the old CustomPaint geometric avatar.
+/// Solvhen AI手机智能体 — AI 头像动画引擎 v1.1
+/// PNG 精灵图方案：16 个手绘帧用于视线方向 + 眨眼动画。
+/// 根据 AgentState 驱动不同的动画参数（眨眼频率、视线移动、呼吸缩放、弹跳）。
+///
+/// 动画系统：
+/// - 眨眼（Blink）：12 步往返，支持慢速/正常/快速三种速度
+/// - 视线（Glance）：周期性切换视线方向 PNG
+/// - 呼吸（Breathing）：AnimationController 驱动的正弦缩放
+/// - 手势（Gesture）：UIController 推送的瞬时姿态（歪头/点头/靠近等）
 library;
 
 import 'dart:async';
@@ -8,56 +14,58 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'ui_controller.dart';
 
+/// 头像动画状态枚举——驱动PNG序列帧动画
 enum AgentState {
   idle, thinking, coding, searching, reading, writing,
   speaking, confused, celebrating, sleeping
 }
 
 // ═══════════════════════════════════════════════
-// BLINK ANIMATION — frame sequence definition
+// 眨眼动画 — 帧序列定义
 // ═══════════════════════════════════════════════
+
+/// 眨眼帧名称数组（闭眼过程的 6 帧）
 const _blinkFrames = [
   '闭眼动画开始', '闭眼五分之一', '闭眼五分之二',
   '闭眼五分之3', '闭眼五分之四', '闭眼五分之五',
 ];
 
-/// Natural blink: 10-step round trip, 30ms/step, 50ms hold at closed.
+/// 自然眨眼参数：10 步往返，30ms/步，闭眼保持 50ms
 const _blinkStepMs = 30;
 const _blinkClosedHoldMs = 50;
 
-/// Quick blink (speaking): 25ms/step, no hold.
+/// 快速眨眼（说话时）：25ms/步，无保持
 const _quickBlinkStepMs = 25;
 
-/// Slow blink (thinking): 80ms/step, 150ms hold.
+/// 慢速眨眼（思考时）：80ms/步，闭眼保持 150ms
 const _slowBlinkStepMs = 80;
 const _slowBlinkHoldMs = 150;
 
-/// Convert phase [0..11] to image asset name.
+/// 将眨眼阶段 [0..11] 转换为图片资源名。
 /// 0→闭眼动画开始 ... 5→闭眼五分之五 ... 11→闭眼动画开始
 String _blinkFrameName(int phase) {
   if (phase <= 5) return _blinkFrames[phase];
-  return _blinkFrames[11 - phase]; // 6→4, 7→3, 8→2, 9→1, 10→0, 11→不会到11
+  return _blinkFrames[11 - phase]; // 6→4, 7→3, 8→2, 9→1, 10→0
 }
 
-/// Blink phase progression for natural blink (12 steps).
-/// Returns list of (frameIndex, holdMs).
+/// 自然眨眼序列（12 步）。
+/// -1 表示"停留在帧5并额外保持"
 List<int> _blinkSequence() => [0, 1, 2, 3, 4, 5, -1, 4, 3, 2, 1, 0];
-// -1 means "stay on frame 5 with extra hold"
 
 // ═══════════════════════════════════════════════
-// STATE CONFIG — per-state animation parameters
+// 状态配置 — 每种 AgentState 的动画参数
 // ═══════════════════════════════════════════════
 
 class _StateConfig {
-  final Duration blinkInterval;  // avg time between blinks
-  final int blinkStepMs;         // ms per blink animation step
-  final int blinkHoldMs;         // ms to hold eyes closed
-  final List<String> directions; // glance direction sequence (empty = no glance)
-  final int glanceStepMs;        // ms per direction change
-  final bool breathing;          // subtle scale oscillation
-  final double breathScale;      // max scale factor (1.0 + breathScale)
-  final int breathDurationSec;   // full cycle duration
-  final double? yBounce;         // vertical bounce amplitude in pixels
+  final Duration blinkInterval;   // 平均眨眼间隔
+  final int blinkStepMs;          // 每眨眼步时长 ms
+  final int blinkHoldMs;          // 闭眼保持时长 ms
+  final List<String> directions;  // 视线方向序列（空 = 不移动）
+  final int glanceStepMs;         // 视线切换间隔 ms
+  final bool breathing;           // 是否启用呼吸缩放
+  final double breathScale;       // 最大缩放比例 (1.0 + breathScale)
+  final int breathDurationSec;    // 完整呼吸周期秒数
+  final double? yBounce;          // 垂直弹跳幅度（像素）
 
   const _StateConfig({
     required this.blinkInterval,
@@ -72,11 +80,12 @@ class _StateConfig {
   });
 }
 
+/// 每种 AgentState 的动画参数映射表
 const _stateConfigs = <AgentState, _StateConfig>{
-  // IDLE: normal blink every 3-5s, subtle breathing, no eye movement
+  // IDLE：正常眨眼 3-5s，微呼吸，不移动视线
   AgentState.idle: _StateConfig(blinkInterval: Duration(seconds: 4)),
 
-  // THINKING: slow deliberate blink, occasional eye drift
+  // THINKING：慢速深思眨眼，偶尔视线漂移
   AgentState.thinking: _StateConfig(
     blinkInterval: Duration(seconds: 8),
     blinkStepMs: _slowBlinkStepMs,
@@ -85,7 +94,7 @@ const _stateConfigs = <AgentState, _StateConfig>{
     glanceStepMs: 900,
   ),
 
-  // SPEAKING: fast frequent blinks, eye contact with occasional glance up
+  // SPEAKING：快速频繁眨眼，眼神交流 + 偶尔向上看
   AgentState.speaking: _StateConfig(
     blinkInterval: Duration(milliseconds: 1500),
     blinkStepMs: _quickBlinkStepMs,
@@ -95,7 +104,7 @@ const _stateConfigs = <AgentState, _StateConfig>{
     yBounce: 2.0,
   ),
 
-  // SEARCHING: cycling through directions, NO blink
+  // SEARCHING：循环移动视线，不眨眼
   AgentState.searching: _StateConfig(
     blinkInterval: Duration(days: 999),
     directions: ['右上', '右', '右下', '下', '左下', '左', '左上', '正上', '中间'],
@@ -103,7 +112,7 @@ const _stateConfigs = <AgentState, _StateConfig>{
     breathing: false,
   ),
 
-  // CODING: very rare blink, focused downward glance
+  // CODING：极稀疏眨眼，专注向下看
   AgentState.coding: _StateConfig(
     blinkInterval: Duration(seconds: 15),
     directions: ['正', '下'],
@@ -112,21 +121,21 @@ const _stateConfigs = <AgentState, _StateConfig>{
     breathDurationSec: 4,
   ),
 
-  // READING: normal blink, horizontal scan
+  // READING：正常眨眼，水平扫视
   AgentState.reading: _StateConfig(
     blinkInterval: Duration(seconds: 4),
     directions: ['正', '右', '正', '左'],
     glanceStepMs: 900,
   ),
 
-  // WRITING: rare blink, subtle vertical bob
+  // WRITING：中等眨眼，轻微垂直弹跳
   AgentState.writing: _StateConfig(
     blinkInterval: Duration(seconds: 5),
     yBounce: 3.0,
     breathDurationSec: 2,
   ),
 
-  // Edge states
+  // 边界状态
   AgentState.confused: _StateConfig(
     blinkInterval: Duration(seconds: 2),
     directions: ['正', '右上', '左下', '正'],
@@ -149,9 +158,11 @@ const _stateConfigs = <AgentState, _StateConfig>{
 };
 
 // ═══════════════════════════════════════════════
-// WIDGET
+// Widget
 // ═══════════════════════════════════════════════
 
+/// AI头像组件——8状态序列帧动画引擎
+/// 状态：thinking/speaking/listening/idle/searching/coding/reading/writing
 class AgentAvatar extends StatefulWidget {
   final double size;
   final AgentState state;
@@ -171,22 +182,23 @@ class AgentAvatar extends StatefulWidget {
 class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin {
   late AnimationController _breatheCtrl;
 
-  // Blink
+  // ── 眨眼状态 ──
   Timer? _blinkTimer;
   Timer? _blinkStepTimer;
-  int _blinkStep = -1; // -1 = not blinking, use direction image
-  bool _blinkOnHold = false;
+  int _blinkStep = -1;       // -1 = 未眨眼，显示方向图片
+  bool _blinkOnHold = false; // 是否在闭眼保持阶段
 
-  // Direction
+  // ── 视线状态 ──
   Timer? _glanceTimer;
   String _currentImage = '正';
   int _glanceIdx = 0;
 
-  // Gesture (ported from old avatar)
+  // ── 手势状态（从旧头像迁移）──
   String? _lastGesture;
   bool _gestureAnimating = false;
   bool _pendingGestureCheck = false;
 
+  /// 获取当前状态的动画配置，未找到时回退到 idle
   _StateConfig get _cfg => _stateConfigs[widget.state] ?? _stateConfigs[AgentState.idle]!;
 
   @override
@@ -208,6 +220,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
     }
   }
 
+  /// 重新启动所有动画循环：取消旧定时器 + 重置状态 + 启动新循环
   void _restartCycles() {
     _blinkTimer?.cancel();
     _blinkStepTimer?.cancel();
@@ -225,24 +238,26 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
     if (mounted) setState(() {});
   }
 
+  /// 启动眨眼和视线循环
   void _startCycles() {
     _scheduleBlink();
     _startGlanceCycle();
   }
 
   // ═══════════════════════════════════════
-  // BLINK
+  // 眨眼
   // ═══════════════════════════════════════
 
+  /// 安排下次眨眼：加上 ±30% 随机抖动，避免机械感
   void _scheduleBlink() {
     final baseMs = _cfg.blinkInterval.inMilliseconds;
-    // Add ±30% random jitter so blinks don't look mechanical
     final jitter = (baseMs * 0.3).round();
     final delay = baseMs + math.Random().nextInt(jitter * 2) - jitter;
     _blinkTimer?.cancel();
     _blinkTimer = Timer(Duration(milliseconds: delay.clamp(200, 30000)), _startBlink);
   }
 
+  /// 开始眨眼动画
   void _startBlink() {
     if (!mounted) return;
     _blinkStep = 0;
@@ -250,6 +265,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
     _advanceBlink();
   }
 
+  /// 推进眨眼动画的一步
   void _advanceBlink() {
     if (!mounted) return;
     if (_blinkStep < 0) {
@@ -259,7 +275,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
 
     final seq = _blinkSequence();
     if (_blinkStep >= seq.length) {
-      // Blink complete
+      // 眨眼完成 → 重置并安排下次
       _blinkStep = -1;
       _blinkOnHold = false;
       if (mounted) setState(() {});
@@ -269,7 +285,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
 
     final idx = seq[_blinkStep];
     if (idx == -1) {
-      // Hold at closed
+      // 闭眼保持阶段
       _blinkOnHold = true;
       if (mounted) setState(() {});
       _blinkStepTimer?.cancel();
@@ -290,9 +306,10 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
   }
 
   // ═══════════════════════════════════════
-  // GLANCE / EYE DIRECTION
+  // 视线移动
   // ═══════════════════════════════════════
 
+  /// 启动视线方向循环定时器
   void _startGlanceCycle() {
     final dirs = _cfg.directions;
     if (dirs.isEmpty) return;
@@ -307,7 +324,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
   }
 
   // ═══════════════════════════════════════
-  // IMAGE RESOLUTION
+  // 图片选择：眨眼优先 → 闭眼保持 → 视线方向
   // ═══════════════════════════════════════
 
   String get _displayImage {
@@ -319,9 +336,10 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
   }
 
   // ═══════════════════════════════════════
-  // GESTURE (ported)
+  // 手势（从旧几何头像迁移）
   // ═══════════════════════════════════════
 
+  /// 检查 UIController 是否有待处理的手势
   void _checkGesture() {
     final ui = UIController();
     if (ui.gesture != null && !_gestureAnimating) {
@@ -331,7 +349,9 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
     }
   }
 
+  /// 播放手势动画：设置瞬时变换，500ms 后重置
   void _playGesture(String gesture) {
+    // 验证手势类型是否有效
     switch (gesture) {
       case 'tilt_head':
       case 'nod':
@@ -356,12 +376,12 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
   }
 
   // ═══════════════════════════════════════
-  // BUILD
+  // 构建
   // ═══════════════════════════════════════
 
   @override
   Widget build(BuildContext context) {
-    // Check for gestures via post-frame callback
+    // ⚠️ 检查手势：使用 _pendingGestureCheck 标志 + addPostFrameCallback 避免 build() 中修改状态
     if (UIController().gesture != null && !_pendingGestureCheck) {
       _pendingGestureCheck = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -370,7 +390,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
       });
     }
 
-    // Gesture scale override (simplified — just set transform, reset after delay)
+    // 手势变换参数
     double gScale = 1.0, gRotate = 0.0, gTranslateY = 0.0;
     if (_gestureAnimating) {
       switch (_lastGesture) {
@@ -383,9 +403,9 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
       }
     }
 
-    // Combined breathing + bounce animation
     final hasMotion = _cfg.breathing || _cfg.yBounce != null || _gestureAnimating;
 
+    // 基础头像图片，加载失败时回退到正脸
     Widget avatar = Image.asset(
       'assets/avatars/${_displayImage}.png',
       width: widget.size,
@@ -399,6 +419,7 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
       ),
     );
 
+    // 需要运动时包裹 AnimatedBuilder 实现呼吸+弹跳+手势合成
     if (hasMotion) {
       avatar = AnimatedBuilder(
         animation: _breatheCtrl,

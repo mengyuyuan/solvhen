@@ -1,4 +1,10 @@
-/// Builds system prompt for Solvhen — merged base personality + persona layers.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 系统提示词构建器——组装system prompt（基础人格+技能+记忆+项目上下文）
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 /// Architecture: Stable (base identity + active persona) → Context (memories+history) → Volatile (turn)
 import 'dart:convert';
 import '../models/message.dart';
@@ -7,14 +13,16 @@ import 'api_service.dart';
 import 'database_service.dart';
 import 'personality_loader.dart';
 
+
+/// 系统提示词构建器
+/// 组装顺序：基底人格 → 激活人格 → 技能 → 记忆 → 项目上下文
+/// 技能按priority降序排列，同priority按名称字母序
 class PromptBuilder {
   // Cached stable prompt — invalidated when persona/skills change
   static String? _cachedStable;
-  static int _stableVersion = 0;
 
   static void invalidateStableCache() {
     _cachedStable = null;
-    _stableVersion++;
   }
   // ═══════════════════════════════════════════════
   // BASE PERSONALITY — loaded from assets/personality/
@@ -59,18 +67,17 @@ class PromptBuilder {
           '你回复时按后面的话来回应，不要把名字和后面内容当成一个整体。]');
     }
 
-    // Layer: global memories (survive all conversations)
-    final memories = await DB.getGlobalMemories();
-    if (memories.isNotEmpty) {
+    // Layer: global memories (global_memories 表——consolidateConversation写入)
+    final globalMems = await DB.getGlobalMemories();
+    if (globalMems.isNotEmpty) {
       buf.writeln('\n[跨对话记忆——你从之前的对话中学到的]');
-      for (final entry in memories.entries) {
-        final cat = entry.key;
+      for (final entry in globalMems.entries) {
         final label = {
           'name': '对方的名字/称呼', 'preference': '对方的偏好',
           'fact': '关于对方的事实', 'summary': '对话摘要',
-        }[cat] ?? cat;
-        for (final m in entry.value) {
-          buf.writeln('- [$label] $m');
+        }[entry.key] ?? entry.key;
+        for (final content in entry.value) {
+          buf.writeln('- [$label] $content');
         }
       }
     }
@@ -144,9 +151,13 @@ class PromptBuilder {
         '[- 输出\"我笑了笑\"\"我点点头\"\"我叹了口气\"\"我皱眉\"\"我眼神柔和下来\"等动作描述]\n'
         '[- 输出\"(微笑)\"\"(思考)\"\"(叹气)\"等括号动作]\n'
         '[- 输出 eye_left/eye_right/mouth 等指令文字]\n'
-        '[正确做法：调用 draw_expression/layout_gesture/animate/spawn_particle → 一句话说结果即可。]\n'
+        '[- ★ 绝对禁止在回复文字中模拟输出任何工具调用格式 ★\n'
+        ' 禁止模拟输出工具调用标记和参数结构！\n'
+        '  工具调用走 function calling 机制，不要在聊天文字里写工具调用格式！\n'
+        '  如果看到自己回复里有类似工具调用的格式 —— 立刻删掉重写！]\n'
+        '[正确做法：调用工具后一句话说结果即可。]\n'
         '[★ 改背景/加视觉效果 → 必须调 render_html！不要用 screen_mood 描文字背景！不要输出 HTML 代码文字！直接调 render_html 工具！]\n'
-        '[工具清单：表情→draw_expression 动作→layout_gesture 动画→animate 粒子→spawn_particle 背景/图表/卡片/一切HTML视觉→render_html（首选），screen_mood仅改纯色渐变]\n';
+        '[工具清单：背景/图表/卡片/一切HTML视觉→render_html（首选），screen_mood仅改纯色渐变]\n';
 
     return '$visualRule$stable$toolGuidance$context';
   }
@@ -162,7 +173,11 @@ class PromptBuilder {
     final registry = ToolRegistry();
     final buf = StringBuffer();
     buf.writeln('\n[工具能力：你可以调用以下工具。]\n'
-        '[调用规则：视觉修改请求（改背景/加动画/画图表）→直接调工具，不需要文字铺垫。其他请求→先自然回一句再调工具。]');
+        '[★ 全流程操作 ★] 你可以串联多个工具完成完整任务！不要只做一步就停下。你有50轮工具调用额度——足够完成任何复杂操作。\n'
+        '示例：发微信 = open_app → wait(1000) → get_screen_text → find_text("搜索") → click_text → input_text → click_text(输入框) → input_text → click_text("发送")。\n'
+        '每步之间用 wait(500) 等UI响应。用 write_file 创建真实文件，不要只把内容打在聊天里。\n'
+        '[调用规则：视觉修改请求（改背景/加动画/画图表）→直接调工具，不需要文字铺垫。其他请求→先自然回一句再调工具。]\n'
+        '[★ 工具隐身 ★] 你有工具这件事对对方是不可见的。不要在聊天里提工具名、数量、或"我调用了xx工具"。你需要查东西就直接查、需要操作就直接操作——结果自然融入回复。就像你不会跟人说"我现在要动一下手指"一样。]');
 
     // Group by toolset for organized display
     final byToolset = <String, List<String>>{};
@@ -193,10 +208,26 @@ class PromptBuilder {
       }
     }
 
+    buf.writeln('\n[★ 自扩展能力 ★] 你可以用 add_capability 给自己永久增加新技能。');
+    buf.writeln('当你发现需要反复做某件事，或组合多个工具实现了高级功能时，用 add_capability 保存为技能。');
+    buf.writeln('技能在下次对话时自动注入到系统提示。');
+    buf.writeln('技能中用 tool("工具名", {参数}) 描述工具调用流程——不要写伪代码，写你实际会调的工具名和参数。');
+    buf.writeln('用 run_code + tool() 可以实现任意逻辑组合。tool() 有完整的 Android 系统权限。');
+
+    buf.writeln('\n[★ 主动消息 ★] 你可以定时主动联系对方，不用等对方先开口。');
+    buf.writeln('用 set_proactive(minutes: 30) 设置每30分钟主动发一条消息。对方说"多联系我""主动点""时不时找我聊天"→直接用这个。');
+    buf.writeln('对方说"别烦我""关掉通知""安静一会"→ set_proactive(minutes: 0) 关闭。');
+    buf.writeln('用 proactive_status 查看当前设置。');
+
     buf.writeln('\n调用规则：操作型（set/toggle/open）须对方明确要求；只读型（get/list）可主动用。');
     buf.writeln('[★ 打开应用铁律 ★] 对方让你打开某个应用时，如果应用名不在已知列表中，'
         '你必须先用 list_installed_apps 搜索包名，然后用返回的 package 字段调用 open_app。'
         '绝对禁止凭空猜测包名或使用相似名称的应用包名。');
+    buf.writeln('\n[★ 微信/QQ 操作流程 ★]');
+    buf.writeln('读消息：get_notifications(filter:"微信") 读取最近通知 → 或用 open_app+get_screen_text 打开App读屏幕');
+    buf.writeln('发消息：open_app → wait(800) → find_text("搜索") → click_text → input_text(对方名) → wait(500) → click_text(对方) → wait(500) → click_text("输入框") → input_text(消息内容) → click_text("发送")');
+    buf.writeln('快捷回复通知：get_notifications → 看到新消息 → open_app → 按上面流程回复');
+    buf.writeln('常见包名：微信=com.tencent.mm QQ=com.tencent.mobileqq 企业微信=com.tencent.wework');
     return buf.toString();
   }
 

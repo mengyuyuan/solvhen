@@ -17,7 +17,7 @@ APK 位置：build/app/outputs/flutter-apk/app-debug.apk
 安装：adb -s 545b6238 install -r <apk>
 
 架构关键：
-- 工具：单例 ToolRegistry，自注册，34个工具
+- 工具：单例 ToolRegistry，自注册，工具数量动态增长
 - 状态：Riverpod (chatProvider)
 - DB：sqflite WAL v7，FTS5（设备可能不支持需 LIKE 降级）
 - 原生：MethodChannel solvhen/system → MainActivity.kt

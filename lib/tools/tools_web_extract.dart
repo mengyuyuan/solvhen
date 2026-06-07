@@ -1,10 +1,16 @@
-/// web_extract — fetch URL content and convert HTML to readable text.
+/// Solvhen AI手机智能体 — 网页内容提取工具
+/// 获取 URL 内容并将 HTML 转为可读纯文本，自动移除脚本、样式、标签。
+/// 内置 SSRF 防护，阻止访问内部网络地址。
 library;
 
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'tool_registry.dart';
 
+/// 注册网页内容提取工具
+/// 工具：web_extract(提取URL正文→Markdown)
+/// 大页面：>5000字符走LLM摘要，>2M字符拒绝
+/// 安全：拒绝内网地址
 void registerWebExtractTool() {
   final registry = ToolRegistry();
   final dio = Dio(BaseOptions(
@@ -33,26 +39,21 @@ void registerWebExtractTool() {
     },
     handler: (args) async {
       final url = args['url'] as String;
-      // SSRF protection — block non-http schemes and internal IPs
+      // ── SSRF 防护 ──
       final uri = Uri.tryParse(url);
       if (uri == null) {
         return jsonEncode({'success': false, 'error': '无法解析URL: $url'});
       }
+      // 仅允许 http/https 协议
       if (uri.scheme != 'http' && uri.scheme != 'https') {
         return jsonEncode({'success': false, 'error': '不支持的URL协议: ${uri.scheme}。仅支持 http/https。'});
       }
       final host = uri.host.toLowerCase();
+      // 阻止内部/私有 IP 地址和 .local 域名（mDNS）
       if (host == 'localhost' || host == '127.0.0.1' || host == '0.0.0.0' ||
           host.startsWith('127.') || host.startsWith('192.168.') ||
-          host.startsWith('10.') || host.startsWith('172.16.') ||
-          host.startsWith('172.17.') || host.startsWith('172.18.') ||
-          host.startsWith('172.19.') || host.startsWith('172.20.') ||
-          host.startsWith('172.21.') || host.startsWith('172.22.') ||
-          host.startsWith('172.23.') || host.startsWith('172.24.') ||
-          host.startsWith('172.25.') || host.startsWith('172.26.') ||
-          host.startsWith('172.27.') || host.startsWith('172.28.') ||
-          host.startsWith('172.29.') || host.startsWith('172.30.') ||
-          host.startsWith('172.31.') || host.endsWith('.local')) {
+          host.startsWith('10.') || host.endsWith('.local') ||
+          (host.startsWith('172.') && _isPrivate172(host))) {
         return jsonEncode({'success': false, 'error': '禁止访问内部网络地址: $host'});
       }
       try {
@@ -85,23 +86,23 @@ void registerWebExtractTool() {
   ));
 }
 
-/// Strip HTML tags, scripts, styles, and decode entities.
+/// 将 HTML 转为纯文本：移除脚本、样式、标签，解码 HTML 实体，压缩空白。
 String _htmlToText(String html) {
   var text = html;
 
-  // Remove scripts and styles
+  // 移除脚本、样式、noscript 块（连同内容）
   text = text.replaceAll(RegExp(r'<script[^>]*>.*?</script>', dotAll: true), '');
   text = text.replaceAll(RegExp(r'<style[^>]*>.*?</style>', dotAll: true), '');
   text = text.replaceAll(RegExp(r'<noscript[^>]*>.*?</noscript>', dotAll: true), '');
 
-  // Replace block elements with newlines
+  // 块级元素替换为换行——原始正则中的 h[1-6] 是字符类，匹配 h1~h6
   const blockTags = 'div|p|h[1-6]|li|tr|br|hr|section|article|header|footer|main|aside|nav';
   text = text.replaceAll(RegExp('</?(?:$blockTags)[^>]*>'), '\n');
 
-  // Remove all remaining HTML tags
+  // 移除剩余所有 HTML 标签
   text = text.replaceAll(RegExp(r'<[^>]+>'), '');
 
-  // Decode HTML entities
+  // 解码常见 HTML 实体
   text = text
       .replaceAll('&amp;', '&')
       .replaceAll('&lt;', '<')
@@ -111,11 +112,11 @@ String _htmlToText(String html) {
       .replaceAll('&nbsp;', ' ')
       .replaceAll('&#x2F;', '/');
 
-  // Replace numeric entities
+  // 解码数字实体：&#DDD; 和 &#xHHH;
   text = text.replaceAllMapped(RegExp(r'&#(\d+);'), (m) => String.fromCharCode(int.parse(m.group(1)!)));
   text = text.replaceAllMapped(RegExp(r'&#[xX]([0-9a-fA-F]+);'), (m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)));
 
-  // Collapse whitespace
+  // 压缩多余空白
   text = text.replaceAll(RegExp(r'[ \t]+'), ' ');
   text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
   text = text.trim();
@@ -123,7 +124,17 @@ String _htmlToText(String html) {
   return text;
 }
 
+/// 截断异常消息，避免返回过长的错误信息。
 String _shortErr(Object e) {
   final s = e.toString();
   return s.length > 80 ? '${s.substring(0, 80)}…' : s;
+}
+
+/// 判断 172.x.x.x 中的第二位是否在私有范围（16-31）内。
+/// 172.16.0.0/12 范围: 172.16.0.0 – 172.31.255.255
+bool _isPrivate172(String host) {
+  final parts = host.split('.');
+  if (parts.length < 2) return false;
+  final second = int.tryParse(parts[1]);
+  return second != null && second >= 16 && second <= 31;
 }

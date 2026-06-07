@@ -1,6 +1,11 @@
-/// UI Controller — bridge between AI tools and Flutter UI.
-/// V2: customExpression, animation state, typewriter all integrated.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// UI控制器——屏幕情绪/背景效果/粒子密度/颜色主题的状态管理
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
+/// V2: customExpression, animation state, typewriter all integrated.
 
 import 'dart:async';
 import 'dart:convert';
@@ -142,6 +147,8 @@ class AvatarExpressionData {
   );
 }
 
+/// UI控制器——屏幕情绪/背景效果/粒子密度/颜色主题的状态管理
+/// ⚠️ toJson不序列化bgEffects（防持久化泄漏）
 class UIController extends ChangeNotifier {
   static final UIController _instance = UIController._();
   factory UIController() => _instance;
@@ -158,11 +165,11 @@ class UIController extends ChangeNotifier {
         _mood = ScreenMood.fromJson(json);
       }
       // Load bubble colors
-      final bubbleHex = config['bubble_color'] as String?;
+      final bubbleHex = config['bubble_color'];
       if (bubbleHex != null && bubbleHex.isNotEmpty) {
         _bubbleColor = _parseHexColor(bubbleHex);
       }
-      final userBubbleHex = config['user_bubble_color'] as String?;
+      final userBubbleHex = config['user_bubble_color'];
       if (userBubbleHex != null && userBubbleHex.isNotEmpty) {
         _userBubbleColor = _parseHexColor(userBubbleHex);
       }

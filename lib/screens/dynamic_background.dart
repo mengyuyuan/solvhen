@@ -1,20 +1,23 @@
-/// Dynamic background canvas — AI-controlled rendering primitives.
-/// Architecture: AI pushes bg_effects[{op, ...}] → painter renders.
-/// Each op is a self-contained rendering primitive. Parse errors → skip that op.
-/// If ALL ops fail or empty → floor layer (gradient/color) shows through.
+/// Solvhen AI手机智能体 — 动态背景画布
+/// AI 通过 bg_effects[{op, ...}] 控制渲染原语，painter 逐帧绘制。
+/// 每个 op 是自包含的渲染原语。解析错误 → 跳过该 op。
+/// 若所有 op 失败或为空 → 底层渐变色作为背景显示。
 ///
-/// Ops:
-///   particles — configurable emitter with arbitrary polygon shapes
-///   grid — perspective grid (sci-fi / cyberpunk)
-///   pulse_ring — expanding concentric ring (holographic)
-///   scanlines — moving horizontal/vertical lines (cyberpunk)
+/// 支持的 Ops:
+///   particles  — 可配置粒子发射器（支持多边形/心形/星形等形状）
+///   grid       — 透视网格（科幻/赛博朋克）
+///   pulse_ring — 扩散同心圆环（全息效果）
+///   scanlines  — 移动的水平/垂直线条（赛博朋克）
+///   canvas     — 静态画布元素（椭圆/矩形/路径 + 模糊 + 混合模式）
 library;
 
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'ui_controller.dart';
 
+/// 动态背景绘制器
+/// 负责：粒子系统 + 渐变背景 + 暗角效果 + 扫描线 + 网格
+/// ⚠️ build()内禁止修改AnimationController状态——用addPostFrameCallback
 class DynamicBackground extends StatefulWidget {
   const DynamicBackground({super.key});
   @override
@@ -25,13 +28,14 @@ class _DynamicBackgroundState extends State<DynamicBackground>
     with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
 
-  // Cache: avoid re-parsing effects every frame (H14 fix)
+  /// 缓存：避免每帧重复解析 effects 列表（H14 优化）
   List<Map<String, dynamic>>? _lastEffects;
   List<_BgOp> _cachedOps = const [];
 
+  /// 获取解析后的 ops，相同 effects 引用直接返回缓存结果
   List<_BgOp> _getOps(List<Map<String, dynamic>>? effects) {
     if (effects == null) return const [];
-    // Use identity check — same list reference = same effects
+    // 引用相等检查：相同列表引用 → 相同 effects
     if (identical(effects, _lastEffects)) return _cachedOps;
     _lastEffects = effects;
     _cachedOps = _BgPainter.parseOps(effects);
@@ -41,6 +45,7 @@ class _DynamicBackgroundState extends State<DynamicBackground>
   @override
   void initState() {
     super.initState();
+    // 120 秒长周期动画，避免快速循环
     _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 120));
   }
 
@@ -54,27 +59,30 @@ class _DynamicBackgroundState extends State<DynamicBackground>
   Widget build(BuildContext context) {
     final mood = UIController().mood;
     final effects = mood.bgEffects;
-    final density = mood.particleDensity ?? 0.0;
 
-    if ((effects == null || effects.isEmpty) && density <= 0.005) {
-      _ctrl.stop();
-      return const SizedBox.shrink();
+    // 始终渲染：无显式 effects 时使用默认环境粒子
+    final activeEffects = (effects != null && effects.isNotEmpty)
+        ? effects
+        : _defaultParticles(mood.accent ?? const Color(0xFFFFFFFF));
+
+    // ⚠️ 启动动画循环：使用 addPostFrameCallback 避免 build() 中直接修改 AnimationController 状态
+    if (!_ctrl.isAnimating) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _ctrl.repeat();
+      });
     }
-
-    // Start animation loop when effects are active (idempotent)
-    if (!_ctrl.isAnimating) _ctrl.repeat();
 
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: _ctrl,
         builder: (_, __) {
-          // Read UIController INSIDE builder — picks up changes between builds
+          // ⚠️ 在 builder 内部读取 UIController —— 捕捉 build 之间的变化
           final m = UIController().mood;
-          final efx = m.bgEffects ?? effects;
+          final efx = m.bgEffects ?? activeEffects;
           final den = (m.particleDensity ?? 0.0).clamp(0.0, 1.0);
           final spd = m.particleSpeed ?? 1.0;
           final acc = m.accent ?? const Color(0xFFFFFFFF);
-          final ops = _getOps((efx != null && efx.isNotEmpty) ? efx : effects);
+          final ops = _getOps(efx.isNotEmpty ? efx : activeEffects);
           return CustomPaint(
             painter: _BgPainter(
               time: _ctrl.value * 120 * spd,
@@ -87,23 +95,43 @@ class _DynamicBackgroundState extends State<DynamicBackground>
       ),
     );
   }
+
+  /// 默认环境粒子：无 AI 设置 effects 时的保底渲染
+  List<Map<String, dynamic>> _defaultParticles(Color accent) {
+    // ⚠️ 颜色编码：value 是 ARGB int → hex → 去掉 Alpha 通道 → RRGGBB
+    final hex = '#${accent.value.toRadixString(16).padLeft(8, '0').substring(2)}';
+    return [
+      {
+        'op': 'particles',
+        'count': 25,
+        'speed': 0.4,
+        'size': 0.6,
+        'opacity': 0.25,
+        'color': hex,
+        'shape': 'circle',
+        'drift': 0.3,
+      },
+    ];
+  }
 }
 
 // ═══════════════════════════════════════════════
-// PARSED OPS — validated at parse, safe to render
+// 解析后的 Ops —— 解析时校验，渲染时安全使用
 // ═══════════════════════════════════════════════
 
+/// 背景操作基类
 abstract class _BgOp {}
 
+/// 粒子操作：支持圆形/椭圆/多边形/特殊形状（心形/星形等）
 class _ParticleOp extends _BgOp {
-  final List<Offset> poly; // polygon vertices (normalized), or empty for circle
+  final List<Offset> poly;   // 多边形顶点（归一化坐标），空表示圆形
   final bool isCircle, isEllipse;
   final double ellipseW, ellipseH;
   final Color color;
   final int count;
   final double size, speed, opacity;
   final int seed;
-  final String? shape; // 'heart','star','spark','?' — shape drawn per particle
+  final String? shape;       // 'heart','star','spark','?' — 每粒子的特殊形状
 
   _ParticleOp({
     this.poly = const [],
@@ -120,6 +148,7 @@ class _ParticleOp extends _BgOp {
     this.shape,
   });
 
+  /// 从 JSON map 安全解析粒子配置，失败返回 null
   static _ParticleOp? tryParse(Map<String, dynamic> m) {
     final colorHex = m['color'] as String?;
     if (colorHex == null && m['color_hint'] == null) return null;
@@ -130,6 +159,8 @@ class _ParticleOp extends _BgOp {
     final shape = m['shape'] as String?;
     final seed = (m['seed'] as num?)?.toInt() ?? 42;
 
+    // ⚠️ 颜色解析：hex → int ARGB。6位补FF，8位直接用。
+    // 此逻辑与 ui_controller.dart 中的 _parseColor 重复，应提取到共享工具函数。
     Color color;
     if (colorHex != null) {
       final h = colorHex.replaceFirst('#', '');
@@ -138,7 +169,7 @@ class _ParticleOp extends _BgOp {
       color = const Color(0xFFFFFFFF);
     }
 
-    // Parse polygon vertices: "poly:x1,y1 x2,y2 ..."
+    // 解析多边形顶点："poly:x1,y1 x2,y2 ..." 格式
     final polyStr = m['poly'] as String?;
     List<Offset> poly = [];
     bool isCircle = m['isCircle'] != false;
@@ -179,6 +210,7 @@ class _ParticleOp extends _BgOp {
   }
 }
 
+/// 透视网格操作：科幻/赛博朋克风格的线条网格
 class _GridOp extends _BgOp {
   final Color color;
   final int lines;
@@ -195,6 +227,7 @@ class _GridOp extends _BgOp {
   }
 }
 
+/// 扩散圆环操作：全息风格的同心圆
 class _RingOp extends _BgOp {
   final Color color;
   final int count;
@@ -212,6 +245,7 @@ class _RingOp extends _BgOp {
   }
 }
 
+/// 扫描线操作：移动的水平/垂直线条
 class _ScanlineOp extends _BgOp {
   final Color color;
   final double spacing, opacity;
@@ -229,11 +263,12 @@ class _ScanlineOp extends _BgOp {
   }
 }
 
+/// 画布元素操作：静态形状（椭圆/矩形/圆形/路径）+ 模糊 + 混合模式
 class _CanvasOp extends _BgOp {
-  final String shape; // 'ellipse','rect','circle','path'
+  final String shape;   // 'ellipse','rect','circle','path'
   final Color color;
   final double blur, opacity, x, y, w, h, rotation;
-  final String blend;
+  final String blend;   // 'screen','overlay','softLight','plus'
   _CanvasOp({
     this.shape = 'ellipse', required this.color, this.blur = 0, this.opacity = 0.5,
     this.x = 0.5, this.y = 0.5, this.w = 0.6, this.h = 0.4, this.rotation = 0,
@@ -260,7 +295,7 @@ class _CanvasOp extends _BgOp {
 }
 
 // ═══════════════════════════════════════════════
-// PAINTER
+// 自定义 Painter：核心渲染引擎
 // ═══════════════════════════════════════════════
 
 class _BgPainter extends CustomPainter {
@@ -270,6 +305,7 @@ class _BgPainter extends CustomPainter {
 
   _BgPainter({required this.time, required this.density, required this.color, required this.ops});
 
+  /// 解析 effects JSON → 类型安全的 op 列表。解析错误单独跳过。
   static List<_BgOp> parseOps(List<Map<String, dynamic>>? effects) {
     if (effects == null || effects.isEmpty) return const [];
     final result = <_BgOp>[];
@@ -284,7 +320,7 @@ class _BgPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (ops.isEmpty && density <= 0.005) return;
 
-    // Floor
+    // 底层：密度驱动的半透明底色
     final paint = Paint();
     final baseAlpha = (density * 0.15).clamp(0.0, 0.15);
     if (baseAlpha > 0.001) {
@@ -292,6 +328,7 @@ class _BgPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
     }
 
+    // 按顺序渲染每个 op
     for (final op in ops) {
       if (op is _ParticleOp) _drawParticles(canvas, size, op);
       if (op is _GridOp) _drawGrid(canvas, size, op);
@@ -303,11 +340,12 @@ class _BgPainter extends CustomPainter {
     _renderCustom(canvas, size);
   }
 
+  /// 编译时自定义渲染钩子：可通过 write_file 注入额外渲染逻辑
   void _renderCustom(Canvas canvas, Size size) {
-    // Hook for compile-time custom rendering via write_file injection.
-    // Override _BgPainter._renderCustom in a separate file build pipeline.
+    // 默认空实现。在构建流水线中通过代码注入覆盖此方法。
   }
 
+  /// 顶层 op 分发：根据 'op' 字段路由到对应的 tryParse
   static _BgOp? _parseTopOp(Map<String, dynamic> m) {
     final op = m['op'] as String?;
     if (op == null) return null;
@@ -321,7 +359,7 @@ class _BgPainter extends CustomPainter {
     }
   }
 
-  // Deterministic hash — same seeds produce same values across frames
+  /// 确定性哈希函数：相同 seed 产生相同的伪随机值，保证帧间一致
   static double _hash(int i, int a, int b) {
     int h = i * 0x9E3779B9 + a * 0x85EBCA77 + b * 0xC2B2AE35;
     h = ((h >> 16) ^ h) * 0x45D9F3B;
@@ -329,10 +367,12 @@ class _BgPainter extends CustomPainter {
     return (h & 0x7FFFFFFF) / 0x7FFFFFFF;
   }
 
+  /// 绘制粒子系统：位置由哈希决定，运动由 time 驱动
   void _drawParticles(Canvas canvas, Size size, _ParticleOp e) {
     final paint = Paint()..color = e.color.withValues(alpha: e.opacity);
     final w = size.width, h = size.height;
     for (int i = 0; i < e.count; i++) {
+      // 确定性位置 + time 驱动的偏移
       final px = _hash(i, e.seed, 42);
       final py = _hash(i, e.seed, 5678);
       final offsetX = (px - 0.5) * 0.2 * e.speed * (time % 10);
@@ -342,11 +382,13 @@ class _BgPainter extends CustomPainter {
       final s = e.size * (0.5 + _hash(i, e.seed, 999) * 0.5);
       final cx = x * w, cy = y * h;
 
+      // ⚠️ 特殊形状绘制：与 particle_overlay.dart 中的逻辑重复，应提取到共享模块
       if (e.shape == 'heart') { _drawHeart(canvas, cx, cy, s, paint); continue; }
       if (e.shape == 'star') { _drawStar(canvas, cx, cy, s, paint); continue; }
       if (e.shape == 'spark') { _drawSpark(canvas, cx, cy, s, paint); continue; }
       if (e.shape == '?') { _drawQuestion(canvas, cx, cy, s, paint, e.color); continue; }
 
+      // 默认形状：圆形 / 椭圆 / 多边形
       if (e.isCircle) {
         canvas.drawCircle(Offset(cx, cy), s / 2, paint);
       } else if (e.isEllipse) {
@@ -357,7 +399,7 @@ class _BgPainter extends CustomPainter {
         canvas.restore();
       } else if (e.poly.isNotEmpty) {
         final path = Path();
-        final scale = s / 20; // normalize
+        final scale = s / 20; // 归一化缩放
         path.moveTo(e.poly.first.dx * scale, e.poly.first.dy * scale);
         for (int j = 1; j < e.poly.length; j++) {
           path.lineTo(e.poly[j].dx * scale, e.poly[j].dy * scale);
@@ -373,6 +415,7 @@ class _BgPainter extends CustomPainter {
     }
   }
 
+  /// 绘制心形：三次贝塞尔曲线
   void _drawHeart(Canvas c, double x, double y, double s, Paint p) {
     final path = Path();
     final r = s * 0.25;
@@ -382,6 +425,7 @@ class _BgPainter extends CustomPainter {
     c.drawPath(path, p);
   }
 
+  /// 绘制五角星
   void _drawStar(Canvas c, double x, double y, double s, Paint p) {
     final path = Path();
     final r = s * 0.4;
@@ -395,6 +439,7 @@ class _BgPainter extends CustomPainter {
     c.drawPath(path, p);
   }
 
+  /// 绘制十字星芒
   void _drawSpark(Canvas c, double x, double y, double s, Paint p) {
     final path = Path();
     final r = s * 0.5;
@@ -409,6 +454,7 @@ class _BgPainter extends CustomPainter {
     p.style = PaintingStyle.fill;
   }
 
+  /// 绘制问号文本
   void _drawQuestion(Canvas c, double x, double y, double s, Paint p, Color color) {
     final tp = TextPainter(
       text: TextSpan(text: '?', style: TextStyle(color: color, fontSize: s * 1.2, fontWeight: FontWeight.bold)),
@@ -417,12 +463,13 @@ class _BgPainter extends CustomPainter {
     tp.paint(c, Offset(x - tp.width / 2, y - tp.height / 2));
   }
 
+  /// 绘制透视网格：向中心点汇聚的水平/垂直线
   void _drawGrid(Canvas canvas, Size size, _GridOp g) {
     final paint = Paint()
       ..color = g.color.withValues(alpha: g.opacity)
       ..strokeWidth = 0.5;
     final w = size.width, h = size.height;
-    final cx = w / 2, cy = h * 0.4;
+    final cx = w / 2, cy = h * 0.4;  // 汇聚点偏上
 
     for (int i = -g.lines; i <= g.lines; i++) {
       final x = cx + i * (w / g.lines);
@@ -433,6 +480,7 @@ class _BgPainter extends CustomPainter {
     }
   }
 
+  /// 绘制扩散圆环：从中心向外扩散，带淡入淡出
   void _drawRings(Canvas canvas, Size size, _RingOp r) {
     final paint = Paint()
       ..color = r.color.withValues(alpha: r.opacity)
@@ -451,6 +499,7 @@ class _BgPainter extends CustomPainter {
     }
   }
 
+  /// 绘制扫描线：水平或垂直移动
   void _drawScanlines(Canvas canvas, Size size, _ScanlineOp s) {
     final paint = Paint()..color = s.color.withValues(alpha: s.opacity);
     final w = size.width, h = size.height;
@@ -467,12 +516,13 @@ class _BgPainter extends CustomPainter {
     }
   }
 
+  /// 绘制画布元素：支持模糊、旋转和混合模式
   void _drawCanvasOp(Canvas canvas, Size size, _CanvasOp op) {
     final paint = Paint()..color = op.color.withValues(alpha: op.opacity);
     if (op.blur > 0) {
       paint.maskFilter = MaskFilter.blur(BlurStyle.normal, op.blur);
     }
-    // Apply blend mode
+    // 混合模式
     switch (op.blend) {
       case 'screen': paint.blendMode = BlendMode.screen; break;
       case 'overlay': paint.blendMode = BlendMode.overlay; break;
@@ -495,7 +545,7 @@ class _BgPainter extends CustomPainter {
         canvas.drawCircle(Offset.zero, (rw + rh) / 4, paint);
         break;
       case 'path':
-        // Simple diamond as default path shape
+        // 默认菱形路径
         final path = Path()
           ..moveTo(0, -rh / 2)
           ..lineTo(rw / 2, 0)
@@ -511,6 +561,7 @@ class _BgPainter extends CustomPainter {
     canvas.restore();
   }
 
+  /// 淡入淡出函数：0→0.1 淡入，0.8→1.0 淡出，中间保持 1.0
   double _fadeOpacity(double frac) {
     if (frac < 0.1) return frac / 0.1;
     if (frac > 0.8) return 1.0 - (frac - 0.8) / 0.2;

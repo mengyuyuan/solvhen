@@ -1,5 +1,10 @@
-/// VoiceChatScreen — fullscreen voice interaction with Edge TTS + STT.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 语音聊天界面——实时语音对话模式的独立界面
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -13,6 +18,8 @@ import '../tools/tool_registry.dart';
 import 'agent_avatar.dart';
 import 'chat_provider.dart';
 
+/// 语音聊天界面——实时语音对话模式
+/// TTS仅在语音输入触发，文字输入静默
 class VoiceChatScreen extends ConsumerStatefulWidget {
   const VoiceChatScreen({super.key});
   @override
@@ -188,10 +195,10 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
                   width: 80, height: 80,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: _recording ? const Color(0xFFFF3B30).withValues(alpha: 0.3) : c.accent.withValues(alpha: 0.15),
-                    border: Border.all(color: _recording ? const Color(0xFFFF3B30) : c.accent, width: 3),
+                    color: _recording ? c.danger.withValues(alpha: 0.3) : c.accent.withValues(alpha: 0.15),
+                    border: Border.all(color: _recording ? c.danger : c.accent, width: 3),
                   ),
-                  child: Icon(Icons.mic, size: 36, color: _recording ? const Color(0xFFFF3B30) : c.accent),
+                  child: Icon(Icons.mic, size: 36, color: _recording ? c.danger : c.accent),
                 ),
               ),
             ),

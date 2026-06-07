@@ -26,7 +26,7 @@ lib/services/api_service.dart — 双模 API: chatStream(SSE) + chatWithTools(�
 lib/services/prompt_builder.dart — 系统提示词组装器
 lib/services/tool_executor.dart — 工具执行引擎: 并行/串行/超时/截断
 lib/services/database_service.dart — SQLite v7
-lib/tools/tool_registry.dart — 单例自注册工具注册表（34 个工具）
+lib/tools/tool_registry.dart — 单例自注册工具注册表（工具数量动态增长，当前约78个）
 
 ## 工具系统核心规则
 - 工具结果顺序必须保留（预分配 List.filled 按 index 写入）

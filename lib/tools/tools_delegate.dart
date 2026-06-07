@@ -1,10 +1,15 @@
-/// Multi-agent tool — spawn sub-agents for parallel work.
+/// Solvhen AI手机智能体 — 多代理委派工具
+/// 生成独立子 agent 并行处理任务，子 agent 在隔离上下文中运行。
+/// 支持单任务模式和批量并行模式（最多3个）。
 library;
 
 import 'dart:convert';
 import 'tool_registry.dart';
 import '../services/sub_agent.dart';
 
+/// 注册子代理委派工具
+/// 工具：delegate_task(委派独立任务给SubAgent执行)
+/// ⚠️ 子代理无父级记忆——需通过context传递全部必要信息
 void registerDelegateTools() {
   final registry = ToolRegistry();
 
@@ -65,8 +70,8 @@ toolsets (可选，默认全部):
     handler: (args) async {
       final runner = SubAgentRunner();
 
+      // 批量并行模式：同时执行多个子任务
       if (args['tasks'] != null) {
-        // Batch parallel mode
         final taskList = args['tasks'] as List<dynamic>;
         if (taskList.isEmpty) {
           return jsonEncode({'error': 'tasks 不能为空'});
@@ -79,7 +84,7 @@ toolsets (可选，默认全部):
           final m = t as Map<String, dynamic>;
           final goal = m['goal'];
           if (goal == null || goal is! String) {
-            return null; // will be filtered below
+            return null; // 无效任务将被过滤
           }
           return SubAgentConfig(
             goal: goal,
@@ -100,7 +105,7 @@ toolsets (可选，默认全部):
         });
       }
 
-      // Single task mode
+      // 单任务模式
       if (args['goal'] == null) {
         return jsonEncode({'error': '请提供 goal 或 tasks'});
       }

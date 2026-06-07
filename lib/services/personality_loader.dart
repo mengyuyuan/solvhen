@@ -1,4 +1,10 @@
-/// Loads base personality text from asset .md files.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 人格加载器——从文件系统加载自定义人格描述
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 /// Replaces hardcoded _baseIdentity/_baseVoice/_baseConstraints in prompt_builder.dart.
 ///
 /// Three files in assets/personality/:
@@ -7,10 +13,10 @@
 ///   base-constraints.md — rules and habits
 ///
 /// Cached after first load to avoid repeated asset reads.
-library;
 
 import 'package:flutter/services.dart' show rootBundle;
 
+/// 人格加载器——从文件系统加载自定义人格描述文本
 class PersonalityLoader {
   static String? _identity;
   static String? _voice;

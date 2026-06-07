@@ -1,5 +1,10 @@
-/// Thinking overlay — shows agent activity above the input bar.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 思考动画覆盖层——AI思考时的加载动画指示器
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -29,6 +34,8 @@ IconData? _stateIcon(AgentState s) {
   }
 }
 
+/// AI思考时的加载动画覆盖层——脉冲点+文字提示
+/// ⚠️ build()内禁止修改AnimationController状态
 class ThinkingOverlay extends StatefulWidget {
   final AgentState state;
   final Color accentColor;
@@ -99,14 +106,8 @@ class _ThinkingOverlayState extends State<ThinkingOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    // Update elapsed inline for immediate responsiveness between timer ticks
-    if (widget._visible && widget.sendStartedAt != null) {
-      final now = DateTime.now();
-      final newElapsed = now.difference(widget.sendStartedAt!).inSeconds;
-      if (newElapsed != _elapsed) {
-        _elapsed = newElapsed;
-      }
-    }
+    // _elapsed is updated by the timer callback, not here.
+    // The timer fires every second; build() just reads the value.
 
     return AnimatedSize(
       duration: const Duration(milliseconds: 250),

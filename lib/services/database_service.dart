@@ -1,13 +1,38 @@
+/// Solvhen — SQLite数据库服务层：WAL模式 + FTS5搜索 + 版本迁移(v1→v9)
+///
+/// 数据表：
+/// - conversations: 对话会话（标题/时间戳/整合标记）
+/// - messages: 消息（内容/角色/会话关联/tool_call/外键级联删除）
+/// - messages_fts: FTS5全文搜索虚拟表（含触发器自动同步）
+/// - personas: 自定义人格（名称/提示词/激活标志）
+/// - config: 键值对配置（api_key/base_url/model/llm_chain等）
+/// - global_memories: 跨对话持久记忆（分类/内容/来源会话）
+/// - skills: 技能库（name/content/enabled/priority）
+/// - voice_profiles: 语音配置文件
+///
+/// 关键设计决策：
+/// - 使用Completer模式避免并发DB打开 → 防止"database is locked"
+/// - WAL模式提升并发读性能
+/// - foreign_keys=ON保证消息级联删除
+/// - 打开失败时自动备份旧DB → 重建空DB → 最高尝试重试一次
+library;
+
 import 'dart:async';
+import 'dart:io';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import '../models/conversation.dart';
 import '../models/persona.dart';
 
+/// SQLite数据库门面 — 全静态方法，Completer保证单例初始化
 class DB {
   static Database? _db;
   static Completer<Database>? _dbCompleter;
 
+  /// 获取数据库实例 — 懒加载 + Completer防并发
+  ///
+  /// 并发安全：多个调用者同时请求database时，共享同一个Completer的future
+  /// 失败重试：首次打开失败时备份旧DB → 删除 → 重建 → 重试一次
   static Future<Database> get database async {
     if (_db != null) return _db!;
     if (_dbCompleter != null) return _dbCompleter!.future;
@@ -15,25 +40,37 @@ class DB {
     try {
       final dbPath = await getDatabasesPath();
       final path = p.join(dbPath, 'companion_v2.db');
-      _db = await openDatabase(path, version: 9, onCreate: _create,
+      _db = await openDatabase(path, version: 10, onCreate: _create,
         onUpgrade: _upgrade,
         onConfigure: (db) async {
+          // WAL模式：写不阻塞读，适合AI对话场景（频繁读写交替）
           await db.rawQuery('PRAGMA journal_mode=WAL');
+          // 外键约束：删除会话时自动级联删除消息
           await db.rawQuery('PRAGMA foreign_keys=ON');
         },
       );
       _dbCompleter!.complete(_db!);
       return _db!;
     } catch (e) {
+      // 第一次失败 → completeError + 清理Completer
       _dbCompleter!.completeError(e);
       _dbCompleter = null;
-      // If DB open failed (e.g. FTS5 during migration), delete and retry once
+      // ⚠️ 重试机制：备份旧DB后删除重建（通常因为FTS5迁移失败或DB损坏）
       try {
         final dbPath = await getDatabasesPath();
         final path = p.join(dbPath, 'companion_v2.db');
+        // 尽力备份 → 时间戳命名避免覆盖历史备份
+        try {
+          final backupPath = '$path.backup.${DateTime.now().millisecondsSinceEpoch}';
+          final dbFile = File(path);
+          if (await dbFile.exists()) {
+            await dbFile.copy(backupPath);
+          }
+        } catch (_) { /* 备份尽力而为 */ }
         await deleteDatabase(path);
+        // 创建新的Completer → 防止旧Future被重复使用
         _dbCompleter = Completer<Database>();
-        _db = await openDatabase(path, version: 9, onCreate: _create,
+        _db = await openDatabase(path, version: 10, onCreate: _create,
           onUpgrade: _upgrade,
           onConfigure: (db) async {
             await db.rawQuery('PRAGMA journal_mode=WAL');
@@ -43,6 +80,7 @@ class DB {
         _dbCompleter!.complete(_db!);
         return _db!;
       } catch (e2) {
+        // 重试也失败 → 完成错误Future，抛出异常
         _dbCompleter!.completeError(e2);
         _dbCompleter = null;
         rethrow;
@@ -50,9 +88,13 @@ class DB {
     }
   }
 
+  /// 首次创建数据库 — 建所有表、索引、触发器、默认配置
+  ///
+  /// ⚠️ FTS5虚拟表使用try-catch包裹：部分Android设备不支持FTS5，
+  /// 失败时静默跳过，searchMessages将使用LIKE回退
   static Future<void> _create(Database db, int v) async {
     try {
-      // ── Conversations ──
+      // ── 对话表 ──
     await db.execute('''
       CREATE TABLE conversations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +106,7 @@ class DB {
     ''');
     await db.execute('CREATE INDEX idx_conv_time ON conversations(updated_at DESC)');
 
-    // ── Messages (with conversation_id) ──
+    // ── 消息表（含对话外键） ──
     await db.execute('''
       CREATE TABLE messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,30 +120,34 @@ class DB {
         FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
       )
     ''');
+    // 复合索引：按会话+时间戳查询（最常见查询模式）
     await db.execute('CREATE INDEX idx_msg_conv ON messages(conversation_id, timestamp)');
 
-    // ── FTS for message search (try FTS5, skip if not supported) ──
+    // ── FTS5全文搜索 ──
     try {
+      // content=外部内容表模式：FTS不存储本体，节省空间
       await db.execute('''
         CREATE VIRTUAL TABLE messages_fts USING fts5(
           content, role, content= messages, content_rowid= id
         )
       ''');
+      // INSERT触发器 → 自动同步FTS索引
       await db.execute('''
         CREATE TRIGGER msg_ai AFTER INSERT ON messages BEGIN
           INSERT OR REPLACE INTO messages_fts(rowid, content, role) VALUES (new.id, new.content, new.role);
         END
       ''');
+      // DELETE触发器 → 'delete'命令从FTS移除
       await db.execute('''
         CREATE TRIGGER msg_ad AFTER DELETE ON messages BEGIN
           INSERT INTO messages_fts(messages_fts, rowid, content, role) VALUES('delete', old.id, old.content, old.role);
         END
       ''');
     } catch (_) {
-      // FTS5 not available on this device — search_history will use LIKE fallback
+      // FTS5不可用 → searchMessages使用LIKE回退
     }
 
-    // ── Personas ──
+    // ── 人格表 ──
     await db.execute('''
       CREATE TABLE personas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,12 +158,12 @@ class DB {
       )
     ''');
 
-    // ── Config ──
+    // ── 配置表 ──
     await db.execute('''
       CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL)
     ''');
 
-    // ── Global Memories (conversation-independent, survives new chats) ──
+    // ── 全局记忆（跨对话持久） ──
     await db.execute('''
       CREATE TABLE global_memories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,7 +175,87 @@ class DB {
       )
     ''');
     await db.execute('CREATE INDEX idx_gm_category ON global_memories(category)');
-    // ── Skills ──
+
+    // ═══════════════════════════════════════
+    // 重型记忆系统 (v10)
+    // ═══════════════════════════════════════
+
+    // 记忆条目——带重要性/访问追踪/衰减
+    await db.execute('''
+      CREATE TABLE memory_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        importance REAL NOT NULL DEFAULT 0.5,
+        access_count INTEGER NOT NULL DEFAULT 0,
+        last_access TEXT,
+        source_conversation_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (source_conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+      )
+    ''');
+    await db.execute('CREATE INDEX idx_me_category ON memory_entries(category)');
+    await db.execute('CREATE INDEX idx_me_importance ON memory_entries(importance DESC)');
+
+    // FTS5 全文索引——替代 LIKE（设备不支持时静默跳过）
+    try {
+      await db.execute('''
+        CREATE VIRTUAL TABLE memory_fts USING fts5(
+          category, content, content=memory_entries, content_rowid=id
+        )
+      ''');
+    } catch (_) {
+      // FTS5 不可用 → MemoryService.search 自动回退 LIKE
+    }
+
+    // 记忆关联图谱
+    await db.execute('''
+      CREATE TABLE memory_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id INTEGER NOT NULL,
+        target_id INTEGER NOT NULL,
+        relation TEXT NOT NULL DEFAULT "related_to",
+        strength REAL NOT NULL DEFAULT 0.5,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (source_id) REFERENCES memory_entries(id) ON DELETE CASCADE,
+        FOREIGN KEY (target_id) REFERENCES memory_entries(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // 情景记忆——每次对话自动摘要
+    await db.execute('''
+      CREATE TABLE memory_episodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL,
+        summary TEXT NOT NULL,
+        participant_count INTEGER DEFAULT 1,
+        message_count INTEGER DEFAULT 0,
+        start_time TEXT NOT NULL,
+        end_time TEXT,
+        importance REAL NOT NULL DEFAULT 0.5,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      )
+    ''');
+
+    // 工作记忆缓冲——最近N轮对话自动注入
+    await db.execute('''
+      CREATE TABLE working_memory (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id INTEGER NOT NULL,
+        turn_index INTEGER NOT NULL,
+        user_msg TEXT NOT NULL,
+        assistant_msg TEXT NOT NULL,
+        key_points TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('CREATE INDEX idx_wm_conv ON working_memory(conversation_id, turn_index DESC)');
+
+    // ── 技能表 ──
+    // 技能由SkillLoader.sync()在启动时从assets同步，此处只建表
     await db.execute('''
       CREATE TABLE skills (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,7 +267,8 @@ class DB {
       )
     ''');
     await db.execute('CREATE INDEX idx_skills_enabled ON skills(enabled, priority)');
-    // ── Voice Profiles ──
+
+    // ── 语音配置表 ──
     await db.execute("CREATE TABLE voice_profiles ("
       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
       "name TEXT NOT NULL,"
@@ -152,16 +279,14 @@ class DB {
       "locale TEXT NOT NULL DEFAULT 'zh-CN',"
       "active INTEGER NOT NULL DEFAULT 0,"
       "created_at TEXT NOT NULL)");
+
+    // ── 默认配置 ──
     await db.insert('config', {'key': 'base_url', 'value': 'https://api.deepseek.com/v1'});
     await db.insert('config', {'key': 'model', 'value': 'deepseek-v4-pro'});
     await db.insert('config', {'key': 'api_key', 'value': ''});
     await db.insert('config', {'key': 'active_conversation', 'value': ''});
 
-    // Skills are now loaded from assets/skills/ by SkillLoader.sync() at startup.
-    // No longer seeded here — the DB skills table starts empty and is populated
-    // on first SkillLoader run (INSERT OR REPLACE, idempotent).
-
-    // ── Create default conversation ──
+    // ── 创建默认对话 ──
     final now = DateTime.now().toIso8601String();
     await db.insert('conversations', {
       'title': '新对话', 'created_at': now, 'updated_at': now,
@@ -171,15 +296,25 @@ class DB {
     }
   }
 
+  /// 数据库版本迁移 — 增量升级，从oldV到newV
+  ///
+  /// v1→v2: 消息增加tool_call_id列
+  /// v2→v3: 引入conversations表、消息关联会话、FTS5、人格表
+  /// v3→v4: global_memories表
+  /// v4→v5: 消息增加tool_calls_json列
+  /// v5→v6: 对话增加consolidated_at列
+  /// v6→v7: skills表
+  /// v7→v8: voice_profiles表
+  /// v8→v9: voice_profiles增加voice_id列（Edge TTS）
   static Future<void> _upgrade(Database db, int oldV, int newV) async {
     if (oldV < 2) {
       await db.execute('ALTER TABLE messages ADD COLUMN tool_call_id TEXT');
     }
     if (oldV < 3) {
-      // Add conversation_id to messages (nullable first)
+      // 消息关联会话 → 先加列再建索引
       await db.execute('ALTER TABLE messages ADD COLUMN conversation_id INTEGER DEFAULT 1');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, timestamp)');
-      // Create conversations table
+      // 创建对话表（如果不存在）
       await db.execute('''
         CREATE TABLE IF NOT EXISTS conversations (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,7 +324,7 @@ class DB {
         )
       ''');
       await db.execute('CREATE INDEX IF NOT EXISTS idx_conv_time ON conversations(updated_at DESC)');
-      // Insert default conversation if none exists
+      // 无对话时插入默认
       final count = Sqflite.firstIntValue(await db.rawQuery('SELECT COUNT(*) FROM conversations')) ?? 0;
       if (count == 0) {
         final now = DateTime.now().toIso8601String();
@@ -197,7 +332,7 @@ class DB {
           'title': '新对话', 'created_at': now, 'updated_at': now,
         });
       }
-      // Create FTS (skip if device doesn't support FTS5)
+      // 尝试建FTS5 → 失败静默跳过
       try {
         await db.execute('''
           CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
@@ -214,10 +349,8 @@ class DB {
             INSERT INTO messages_fts(messages_fts, rowid, content, role) VALUES('delete', old.id, old.content, old.role);
           END
         ''');
-      } catch (_) {
-        // FTS5 not available — search will use LIKE fallback
-      }
-      // Create personas table
+      } catch (_) {}
+      // 人格表
       await db.execute('''
         CREATE TABLE IF NOT EXISTS personas (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,9 +360,9 @@ class DB {
           created_at TEXT NOT NULL
         )
       ''');
-      // Drop old persona/custom_persona config keys — replaced by personas table
+      // 迁移旧config key → 人格表已取代
       await db.delete('config', where: 'key IN (?, ?)', whereArgs: ['persona', 'custom_persona']);
-      // Add active_conversation config
+      // 设置活跃对话
       await db.rawInsert(
         'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
         ['active_conversation', '1'],
@@ -280,23 +413,98 @@ class DB {
         "created_at TEXT NOT NULL)");
     }
     if (oldV < 9) {
-      // Add voice_id column for Edge TTS
       try {
         await db.execute("ALTER TABLE voice_profiles ADD COLUMN voice_id TEXT NOT NULL DEFAULT 'zh-CN-XiaoxiaoNeural'");
       } catch (_) {}
     }
+    if (oldV < 10) {
+      // v10: 重型记忆系统
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS memory_entries (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          category TEXT NOT NULL,
+          content TEXT NOT NULL,
+          importance REAL NOT NULL DEFAULT 0.5,
+          access_count INTEGER NOT NULL DEFAULT 0,
+          last_access TEXT,
+          source_conversation_id INTEGER,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY (source_conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+        )
+      ''');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_me_category ON memory_entries(category)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_me_importance ON memory_entries(importance DESC)');
+      try {
+        await db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(category, content, content=memory_entries, content_rowid=id)');
+      } catch (_) {}
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS memory_links (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source_id INTEGER NOT NULL,
+          target_id INTEGER NOT NULL,
+          relation TEXT NOT NULL DEFAULT "related_to",
+          strength REAL NOT NULL DEFAULT 0.5,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (source_id) REFERENCES memory_entries(id) ON DELETE CASCADE,
+          FOREIGN KEY (target_id) REFERENCES memory_entries(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS memory_episodes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id INTEGER NOT NULL,
+          summary TEXT NOT NULL,
+          participant_count INTEGER DEFAULT 1,
+          message_count INTEGER DEFAULT 0,
+          start_time TEXT NOT NULL,
+          end_time TEXT,
+          importance REAL NOT NULL DEFAULT 0.5,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS working_memory (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          conversation_id INTEGER NOT NULL,
+          turn_index INTEGER NOT NULL,
+          user_msg TEXT NOT NULL,
+          assistant_msg TEXT NOT NULL,
+          key_points TEXT,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        )
+      ''');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_wm_conv ON working_memory(conversation_id, turn_index DESC)');
+      // 迁移旧 global_memories → memory_entries
+      final oldRows = await db.query('global_memories');
+      for (final r in oldRows) {
+        await db.insert('memory_entries', {
+          'category': r['category'],
+          'content': r['content'],
+          'importance': 0.5,
+          'access_count': 1,
+          'source_conversation_id': r['source_conversation_id'],
+          'created_at': r['created_at'],
+          'updated_at': r['created_at'],
+        });
+      }
+    }
   }
 
   // ═══════════════════════════════════════
-  // CONFIG
+  // 配置操作（CONFIG）
   // ═══════════════════════════════════════
 
+  /// 获取所有配置 → Map<key, value>
   static Future<Map<String, String>> getConfig() async {
     final db = await database;
     final rows = await db.query('config');
     return {for (var r in rows) r['key'] as String: r['value'] as String};
   }
 
+  /// 写入/更新配置 — INSERT OR REPLACE实现幂等
   static Future<void> setConfig(String key, String value) async {
     final db = await database;
     await db.rawInsert(
@@ -306,9 +514,10 @@ class DB {
   }
 
   // ═══════════════════════════════════════
-  // CONVERSATIONS
+  // 对话操作（CONVERSATIONS）
   // ═══════════════════════════════════════
 
+  /// 获取所有对话列表 — 含消息计数，按更新时间倒序
   static Future<List<Conversation>> getConversations() async {
     final db = await database;
     final rows = await db.rawQuery('''
@@ -324,6 +533,7 @@ class DB {
     }).toList();
   }
 
+  /// 创建新对话
   static Future<Conversation> createConversation({String title = '新对话'}) async {
     final db = await database;
     final now = DateTime.now().toIso8601String();
@@ -341,6 +551,7 @@ class DB {
     );
   }
 
+  /// 更新对话时间戳 — 用于排序（置顶最近活跃对话）
   static Future<void> touchConversation(int id) async {
     final db = await database;
     await db.update('conversations',
@@ -349,18 +560,22 @@ class DB {
     );
   }
 
+  /// 删除对话 — 级联删除关联消息（外键ON DELETE CASCADE）
   static Future<void> deleteConversation(int id) async {
     final db = await database;
     await db.delete('messages', where: 'conversation_id = ?', whereArgs: [id]);
     await db.delete('conversations', where: 'id = ?', whereArgs: [id]);
   }
 
+  /// 获取当前活跃对话ID
+  ///
+  /// 策略：config表active_conversation → 第一个存在的对话 → 创建新对话
   static Future<int> getActiveConversationId() async {
     final c = await getConfig();
     final idStr = c['active_conversation'] ?? '';
     final id = int.tryParse(idStr);
     if (id != null && id > 0) return id;
-    // Fallback: first conversation
+    // 回退：取最早创建的对话
     final db = await database;
     final first = await db.query('conversations', orderBy: 'id ASC', limit: 1);
     if (first.isNotEmpty) {
@@ -368,7 +583,7 @@ class DB {
       await setConfig('active_conversation', fid.toString());
       return fid;
     }
-    // Create one
+    // 无对话 → 创建一个
     final conv = await createConversation();
     await setConfig('active_conversation', conv.id.toString());
     return conv.id!;
@@ -379,9 +594,10 @@ class DB {
   }
 
   // ═══════════════════════════════════════
-  // MESSAGES
+  // 消息操作（MESSAGES）
   // ═══════════════════════════════════════
 
+  /// 获取指定对话的消息 — 按时间升序，默认50条
   static Future<List<Map<String, dynamic>>> getMessages(int conversationId, {int limit = 50}) async {
     final db = await database;
     return db.query('messages',
@@ -401,11 +617,13 @@ class DB {
     return result.first['cnt'] as int? ?? 0;
   }
 
-  /// Full-text search across all messages. Tries FTS5, falls back to LIKE.
+  /// 全文搜索消息 — FTS5优先，失败回退LIKE
+  ///
+  /// ⚠️ FTS5特殊字符(* " ( ) + -)需转义，否则查询语法错误
   static Future<List<Map<String, dynamic>>> searchMessages(String query, {int limit = 20}) async {
     final db = await database;
     try {
-      // Escape FTS5 special characters to prevent syntax errors
+      // 转义FTS5特殊字符 — 避免MATCH语法错误
       final safeQuery = _escapeFts5(query);
       return await db.rawQuery('''
         SELECT m.content, m.role, m.conversation_id, m.timestamp
@@ -416,7 +634,7 @@ class DB {
         LIMIT ?
       ''', [safeQuery, limit]);
     } catch (_) {
-      // FTS not available — fall back to LIKE
+      // FTS不可用 → LIKE回退（无索引，大数据量慢）
       return await db.rawQuery('''
         SELECT content, role, conversation_id, timestamp
         FROM messages
@@ -427,27 +645,30 @@ class DB {
     }
   }
 
-  /// Estimate token count for messages + system prompt.
-  /// CJK-aware: CJK chars ~1.5 tokens, ASCII ~0.25 tokens.
+  /// Token估算 — 中日韩文字~1.5token/字，ASCII~0.25token/字，+10%格式开销
+  ///
+  /// 用于context窗口预算判断，在发送API请求前评估是否超出模型上限
+  /// Unicode范围覆盖：中日韩统一表意文字+扩展+兼容表意文字+谚文+标点
   static int estimateTokens(List<Map<String, dynamic>> messages, String systemPrompt) {
     int chars = systemPrompt.length;
     for (final m in messages) {
       chars += (m['content'] as String?)?.length ?? 0;
     }
-    // Count CJK characters separately
     int cjk = 0;
+    // 统计system prompt中的CJK字符数
     for (var i = 0; i < systemPrompt.length; i++) {
       final c = systemPrompt.codeUnitAt(i);
-      if ((c >= 0x2E80 && c <= 0x2FDF) || // CJK Radicals
-          (c >= 0x3000 && c <= 0x33FF) || // Punctuation + Kana
-          (c >= 0x3400 && c <= 0x4DBF) || // CJK Extension A
-          (c >= 0x4E00 && c <= 0x9FFF) || // CJK Unified
-          (c >= 0xF900 && c <= 0xFAFF) || // CJK Compatibility
-          (c >= 0xFE30 && c <= 0xFE4F) || // CJK Compat Forms
-          (c >= 0xAC00 && c <= 0xD7AF)) { // Hangul
+      if ((c >= 0x2E80 && c <= 0x2FDF) || // CJK部首
+          (c >= 0x3000 && c <= 0x33FF) || // 标点+假名
+          (c >= 0x3400 && c <= 0x4DBF) || // CJK扩展A
+          (c >= 0x4E00 && c <= 0x9FFF) || // CJK统一表意
+          (c >= 0xF900 && c <= 0xFAFF) || // CJK兼容
+          (c >= 0xFE30 && c <= 0xFE4F) || // CJK兼容格式
+          (c >= 0xAC00 && c <= 0xD7AF)) { // 谚文
         cjk++;
       }
     }
+    // 统计消息中的CJK字符
     for (final m in messages) {
       final content = (m['content'] as String?) ?? '';
       for (var i = 0; i < content.length; i++) {
@@ -464,32 +685,35 @@ class DB {
       }
     }
     final ascii = chars - cjk;
-    // CJK ~1.5 tokens, ASCII ~0.25 tokens, +10% overhead for format/special tokens
+    // CJK~1.5 + ASCII~0.25，+10%开销（special tokens/格式）
     return ((cjk * 1.5 + ascii * 0.25) * 1.1).round();
   }
 
-  /// Per-model context window in tokens.
+  /// 按模型名返回上下文窗口大小
+  ///
+  /// ⚠️ 注意：匹配顺序很重要 — 先匹配更具体的模型（如deepseek-v4 1M），
+  /// 再匹配通用前缀（doubao 128K），最后返回默认值131072
   static int contextWindow(String model) {
     final m = model.toLowerCase();
-    // 1M context models
+    // 1M context模型
     if (m.contains('deepseek-v4')) return 1048576;
     if (m.contains('doubao-seed-2')) return 1048576;
-    // 128K models
+    // 128K/131K
     if (m.contains('deepseek-reasoner') || m.contains('r1')) return 131072;
     if (m.contains('doubao-seed-1.6')) return 131072;
     if (m.contains('doubao') || m.contains('seed')) return 131072;
     if (m.contains('gpt-4o')) return 128000;
-    // 200K models
+    // 200K
     if (m.contains('claude-3.5') || m.contains('claude-4')) return 200000;
     if (m.contains('claude')) return 200000;
-    // Legacy
+    // 旧模型
     if (m.contains('gpt-4')) return 8192;
     if (m.contains('qwen')) return 32768;
-    return 131072; // default
+    return 131072; // 默认
   }
 
   // ═══════════════════════════════════════
-  // PERSONAS
+  // 人格操作（PERSONAS）
   // ═══════════════════════════════════════
 
   static Future<List<Persona>> getPersonas() async {
@@ -522,7 +746,8 @@ class DB {
     await db.delete('personas', where: 'id = ?', whereArgs: [id]);
   }
 
-  /// Activate exactly one persona, deactivate all others.
+  /// 激活指定人格 — 先全部置0再激活目标，保证仅一个人格active
+  /// id=null → 全部置0（回退到基底人格）
   static Future<void> activatePersona(int? id) async {
     final db = await database;
     await db.update('personas', {'active': 0});
@@ -539,10 +764,10 @@ class DB {
   }
 
   // ═══════════════════════════════════════
-  // GLOBAL MEMORIES (conversation-independent)
+  // 全局记忆（GLOBAL MEMORIES）
   // ═══════════════════════════════════════
 
-  /// Get all global memories, grouped by category.
+  /// 获取所有全局记忆 → 按分类分组的Map
   static Future<Map<String, List<String>>> getGlobalMemories() async {
     final db = await database;
     final rows = await db.query('global_memories', orderBy: 'created_at DESC');
@@ -555,7 +780,7 @@ class DB {
     return grouped;
   }
 
-  /// Search global memories by content LIKE query, grouped by category.
+  /// 搜索全局记忆 — LIKE模糊匹配
   static Future<Map<String, List<String>>> searchGlobalMemories(String query) async {
     final db = await database;
     final rows = await db.query('global_memories',
@@ -572,14 +797,14 @@ class DB {
     return grouped;
   }
 
-  /// Save a memory to global store. Deduplicates by content.
+  /// 保存全局记忆 — 先查重（同分类+同内容），再插入
   static Future<void> saveGlobalMemory({
     required String category,
     required String content,
     int? sourceConversationId,
   }) async {
     final db = await database;
-    // Deduplicate: skip if identical content already exists
+    // 去重检查 — 完全相同的记忆不重复存储
     final existing = await db.query('global_memories',
       where: 'category = ? AND content = ?',
       whereArgs: [category, content],
@@ -592,16 +817,16 @@ class DB {
     );
   }
 
-  /// Clear all global memories.
   static Future<void> clearGlobalMemories() async {
     final db = await database;
     await db.delete('global_memories');
   }
 
   // ═══════════════════════════════════════
-  // SKILLS
+  // 技能操作（SKILLS）
   // ═══════════════════════════════════════
 
+  /// 获取已启用的技能 → 按优先级降序+时间升序
   static Future<List<Map<String, dynamic>>> getEnabledSkills() async {
     final db = await database;
     return db.query('skills',
@@ -620,6 +845,7 @@ class DB {
     await db.update('skills', {'enabled': enable ? 1 : 0}, where: 'name = ?', whereArgs: [name]);
   }
 
+  /// 添加/更新技能 — INSERT OR REPLACE实现幂等
   static Future<void> addSkill(String name, String content, {int priority = 0}) async {
     final db = await database;
     await db.rawInsert(
@@ -633,13 +859,17 @@ class DB {
     await db.delete('skills', where: 'name = ?', whereArgs: [name]);
   }
 
-  /// Escape special characters in FTS5 query to prevent syntax errors.
-  /// FTS5 treats these as operators: * " ( ) + - and column-name prefixes.
+  /// 转义FTS5查询中的特殊字符 → 去除*"()+-
+  ///
+  /// FTS5将这些字符视为操作符，未转义会导致MATCH语法错误
   static String _escapeFts5(String query) {
-    // Strip all FTS5 special characters — keep it simple
-    return query.replaceAll(RegExp(r'[*"()+\-]'), '').trim();
+    // 剥离所有FTS5特殊字符 — 保持查询简单安全
+    return query.replaceAll(RegExp(r'[*\"()+\\-]'), '').trim();
   }
-  // ═══ VOICE PROFILES ═══
+
+  // ═══════════════════════════════════════
+  // 语音配置操作（VOICE PROFILES）
+  // ═══════════════════════════════════════
 
   static Future<List<Map<String, dynamic>>> getVoiceProfiles() async {
     final db = await database;
@@ -660,6 +890,7 @@ class DB {
     });
   }
 
+  /// 激活语音配置 — 先全部置0再激活目标
   static Future<void> activateVoiceProfile(int? id) async {
     final db = await database;
     await db.update('voice_profiles', {'active': 0});

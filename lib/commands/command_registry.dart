@@ -1,6 +1,11 @@
-/// Slash command system — like Hermes's command registry.
-/// Commands starting with / are intercepted before reaching the AI.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 命令注册中心——命令schema定义+注册+查找
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
+/// Commands starting with / are intercepted before reaching the AI.
 
 /// A single slash command definition.
 class CommandDef {
@@ -21,7 +26,7 @@ class CommandDef {
 
 enum CommandCategory { theme, system, file, chat, conversation, general }
 
-/// Central command registry — all slash commands defined here.
+/// 命令注册中心——所有命令的schema定义、注册、查找
 class CommandRegistry {
   static const commands = [
     // ── 对话 ──

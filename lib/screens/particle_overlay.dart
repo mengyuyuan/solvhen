@@ -1,10 +1,16 @@
-/// Particle overlay — burst animations triggered by UIController.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 粒子覆盖层——浮动粒子效果叠加层（心形/星形/火花/问号等形状）
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'ui_controller.dart';
 
+/// 粒子特效覆盖层——浮动心形/星形/火花/问号等装饰粒子
 class ParticleOverlay extends StatefulWidget {
   const ParticleOverlay({super.key});
 

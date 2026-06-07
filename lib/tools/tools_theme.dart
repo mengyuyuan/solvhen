@@ -1,4 +1,6 @@
-/// Theme tools — uses global ThemeNotifier singleton (no WidgetRef needed).
+/// Solvhen AI手机智能体 — 主题与配色工具
+/// 通过全局 ThemeNotifier 单例修改界面主题色、明暗模式、气泡颜色。
+/// 无需 WidgetRef，工具可直接调用。
 library;
 
 import 'dart:convert';
@@ -7,10 +9,14 @@ import 'tool_registry.dart';
 import '../theme/theme_provider.dart';
 import '../screens/ui_controller.dart';
 
+/// 注册主题配色工具
+/// 工具：set_theme(AI修改应用全局配色)/get_theme(查看当前配色)
+/// 可修改：50+语义色属性（背景/文字/强调/气泡/危险/警告/成功等）
 void registerThemeTools() {
   final registry = ToolRegistry();
   final theme = ThemeNotifier();
 
+  // ── set_theme_color — 修改界面主题色 ──
   registry.register(ToolEntry(
     name: 'set_theme_color',
     toolset: 'theme',
@@ -43,6 +49,7 @@ void registerThemeTools() {
     },
   ));
 
+  // ── set_theme_mode — 切换明暗模式 ──
   registry.register(ToolEntry(
     name: 'set_theme_mode',
     toolset: 'theme',
@@ -64,6 +71,7 @@ void registerThemeTools() {
     },
   ));
 
+  // ── set_bubble_color — 修改聊天气泡颜色 ──
   registry.register(ToolEntry(
     name: 'set_bubble_color',
     toolset: 'theme',
@@ -84,6 +92,7 @@ void registerThemeTools() {
         final colorStr = args['color'] as String;
         final target = args['target'] as String? ?? 'self';
         final ui = UIController();
+        // reset：恢复默认气泡颜色
         if (colorStr.toLowerCase() == 'reset') {
           if (target == 'me') {
             ui.setUserBubbleColor(null);
@@ -109,12 +118,21 @@ void registerThemeTools() {
   ));
 }
 
+/// 从字符串解析 Flutter Color，支持 hex 和颜色名称。
+/// 注意：与 tools_ui.dart 中的 _parseColor 功能高度重叠，
+/// 但此版本额外支持颜色名映射（如 pink→0xFFFF69B4）。
+/// 后续应将两者合并到 tool_utils.dart 中统一管理。
+///
+/// 已知限制：不支持 3 位 hex 简写（如 #FFF），
+/// 会将其当作无 alpha 的 3 字节解析，结果错误。
 Color? _parseColor(String s) {
   try {
     final h = s.replaceFirst('#', '');
+    // 6位hex补全不透明alpha
     final full = h.length == 6 ? 'FF$h' : h;
     return Color(int.parse(full, radix: 16));
   } catch (_) {
+    // hex 解析失败 → 查颜色名称映射表
     const named = {
       'pink': 0xFFFF69B4, 'red': 0xFFFF0000, 'orange': 0xFFFF9500,
       'yellow': 0xFFFFD700, 'green': 0xFF00FF41, 'teal': 0xFF00FFAA,

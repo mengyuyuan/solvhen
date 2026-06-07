@@ -1,465 +1,161 @@
+/// Solvhen — 设置主页面：iOS风格竖排列表 + 玻璃态卡片，底部WebView画布背景
+///
+/// 架构：垂直ListView，6个设置入口卡片（LLM/TTS/图片/视频/人格/关于），
+/// 每个卡片通过PageRouteBuilder push子页面，带入场动画。
+library;
+
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/theme_provider.dart';
-import '../services/database_service.dart';
-import '../models/persona.dart';
+import 'webview_canvas.dart';
+import 'settings_llm_page.dart';
+import 'settings_tts_page.dart';
+import 'settings_image_page.dart';
+import 'settings_video_page.dart';
+import 'settings_persona_page.dart';
+import 'settings_about_page.dart';
+import 'settings_onebot_page.dart';
 
+/// 设置主页面——各设置模块入口导航
+/// UI设计：竖排列表+玻璃态卡片+push导航，禁用TabBar
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
   @override
   ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  final _urlCtrl = TextEditingController();
-  final _keyCtrl = TextEditingController();
-  final _modelCtrl = TextEditingController();
-  bool _loaded = false;
-  bool _hideKey = true;
+class _SettingsScreenState extends ConsumerState<SettingsScreen> with TickerProviderStateMixin {
+  late final AnimationController _entry;       // 入场动画控制器（700ms）
+  late final List<Animation<double>> _anims;   // 每个卡片独立的错峰动画
 
-  List<Persona> _personas = [];
-  Persona? _activePersona;
+  // 6个设置入口 — icon + 标题 + 副标题
+  static const _items = [
+    (icon: Icons.psychology_rounded, title: 'LLM 模型', subtitle: '模型链 · 降级策略 · 多厂商'),
+    (icon: Icons.record_voice_over_rounded, title: 'TTS 语音', subtitle: '引擎 · 音色 · 克隆'),
+    (icon: Icons.image_rounded, title: '图片生成', subtitle: '147ai · DALL-E · ComfyUI'),
+    (icon: Icons.movie_creation_rounded, title: '视频生成', subtitle: 'Kling · Runway · ComfyUI'),
+    (icon: Icons.face_rounded, title: '自定义人格', subtitle: '场景叠加 · 基底不替换'),
+    (icon: Icons.chat_rounded, title: 'QQ/微信 桥接', subtitle: 'OneBot · NapCatQQ · 自动回复'),
+    (icon: Icons.info_outline_rounded, title: '关于 Solvhen', subtitle: '更新日志'),
+  ];
 
-  // Changelog — update this with each release
-  static const _changelog = [
-    ('核心功能', [
-      '🖐 系统控制：电池/音量/亮度读写，WiFi/蓝牙/手电筒开关，响铃模式/锁屏/屏幕常亮',
-      '📱 应用管理：列出手机上所有已装应用，通过包名或中文名打开任意App',
-      '📁 文件系统：沙箱内文件读写（带行号分页），浏览手机任意文件夹（Download/DCIM等）',
-      '🌐 网络搜索：Bing+百度+搜狗三引擎并行，网页内容提取去HTML，fetch_url抓取',
-      '🧠 记忆系统：跨对话记住你的名字/偏好/重要事实，对话自动整合提取',
-      '🎭 人格系统：完整基底人格（理性·怜悯·求知欲）+ 自定义叠加层',
-      '🤖 子Agent：delegate_task并行委派多个子分身处理复杂任务',
-    ]),
-    ('界面与交互', [
-      '👁 动态头像：16帧手绘PNG表情，10个眼球方向，6帧眨眼序列，8状态动画引擎',
-      '🎨 动态背景：粒子系统/透视网格/脉冲光环/扫描线/Canvas绘制原语（模糊+混合模式）',
-      '🖼 WebView画布：render_html全屏HTML/CSS渲染，持久化保存，重启恢复',
-      '✨ 表情控制：draw_expression画表情，animate关键帧动画，spawn_particle粒子',
-      '⌨ 斜杠命令：/new /clear /theme /volume /brightness /wifi 等快捷操作',
-    ]),
-    ('智能特性', [
-      '🔧 28个工具：系统/主题/文件/网络/代码/记忆/历史/UI/委派，动态注册',
-      '🔄 自我进化：rebuild_self修改自身渲染代码→编译→安装→重启生效',
-      '📊 实时上下文条：token使用率显示，CJK精确估算（1.5x），模型窗口自适应',
-      '💬 多对话管理：抽屉切换/新建/删除对话，SQLite+FTS5全文搜索',
-      '🔒 安全：路径白名单/SSRF防护/Shell注入修复/FTS5转义/工具循环保护',
-    ]),
+  static const _pages = [
+    SettingsLlmPage(),
+    SettingsTtsPage(),
+    SettingsImagePage(),
+    SettingsVideoPage(),
+    SettingsPersonaPage(),
+    SettingsOneBotPage(),
+    SettingsAboutPage(),
   ];
 
   @override
   void initState() {
     super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final results = await Future.wait([
-        DB.getConfig(),
-        DB.getPersonas(),
-        DB.getActivePersona(),
-      ]);
-      final c = results[0] as Map<String, String>;
-      _urlCtrl.text = c['base_url'] ?? 'https://api.deepseek.com/v1';
-      _keyCtrl.text = c['api_key'] ?? '';
-      _modelCtrl.text = c['model'] ?? 'deepseek-v4-pro';
-      _personas = results[1] as List<Persona>;
-      _activePersona = results[2] as Persona?;
-    } catch (e) {
-      // If DB reads fail, still show UI (config fields empty, no personas)
-      _personas = [];
-      _activePersona = null;
-      debugPrint('Settings _load error: $e');
-    }
-    setState(() => _loaded = true);
-  }
-
-  Future<void> _save() async {
-    FocusScope.of(context).unfocus();
-    try {
-      final db = await DB.database;
-      await db.transaction((txn) async {
-        await txn.rawInsert(
-          'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
-          ['base_url', _urlCtrl.text.trim()],
-        );
-        await txn.rawInsert(
-          'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
-          ['api_key', _keyCtrl.text.trim()],
-        );
-        await txn.rawInsert(
-          'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
-          ['model', _modelCtrl.text.trim()],
-        );
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已保存'), behavior: SnackBarBehavior.floating, duration: Duration(seconds: 1)),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('保存失败: $e'), behavior: SnackBarBehavior.floating),
-        );
-      }
-    }
-  }
-
-  void _preset(String label, String url, String model) {
-    _urlCtrl.text = url;
-    _modelCtrl.text = model;
-    _save().catchError((e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('预设保存失败: $e'), behavior: SnackBarBehavior.floating),
-        );
-      }
-    });
-  }
-
-  Future<void> _activatePersona(Persona? p) async {
-    await DB.activatePersona(p?.id);
-    setState(() => _activePersona = p);
-  }
-
-  Future<void> _addPersona() async {
-    final nameCtrl = TextEditingController();
-    final promptCtrl = TextEditingController();
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('新建人格'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: '人格名称', hintText: '给这个人格起个名字',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: promptCtrl,
-                maxLines: 5, minLines: 3,
-                decoration: const InputDecoration(
-                  labelText: '人格描述', hintText: '描述你要叠加的行为、语气、规则...\n这些会追加在Solvhen基底人格之上。',
-                  border: OutlineInputBorder(),
-                  alignLabelWithHint: true,
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, {'name': nameCtrl.text.trim(), 'prompt': promptCtrl.text.trim()}),
-            child: const Text('创建'),
-          ),
-        ],
-      ),
-    );
-    if (result != null && (result['name'] as String?)?.trim().isNotEmpty == true) {
-      await DB.createPersona(name: (result['name'] as String).trim(), prompt: result['prompt'] ?? '');
-      _personas = await DB.getPersonas();
-      setState(() {});
-    }
-  }
-
-  Future<void> _editPersona(Persona p) async {
-    final nameCtrl = TextEditingController(text: p.name);
-    final promptCtrl = TextEditingController(text: p.prompt);
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑人格'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: '人格名称',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: promptCtrl,
-                maxLines: 5, minLines: 3,
-                decoration: const InputDecoration(
-                  labelText: '人格描述',
-                  border: OutlineInputBorder(),
-                  alignLabelWithHint: true,
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, {'name': nameCtrl.text.trim(), 'prompt': promptCtrl.text.trim()}),
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
-    if (result != null && (result['name'] as String?)?.trim().isNotEmpty == true && p.id != null) {
-      await DB.updatePersona(p.id!, name: (result['name'] as String).trim(), prompt: result['prompt']);
-      _personas = await DB.getPersonas();
-      _activePersona = await DB.getActivePersona();
-      setState(() {});
-    }
+    _entry = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    // 错峰入场：每个卡片延迟 i/n 比例开始，产生依次滑入效果
+    _anims = List.generate(_items.length, (i) =>
+      CurvedAnimation(parent: _entry, curve: Interval(i / _items.length, 1.0, curve: Curves.easeOutCubic)));
+    _entry.forward();
   }
 
   @override
-  void dispose() { _urlCtrl.dispose(); _keyCtrl.dispose(); _modelCtrl.dispose(); super.dispose(); }
+  void dispose() { _entry.dispose(); super.dispose(); }
+
+  /// 推入子设置页 — 使用PageRouteBuilder自定义转场动画（淡入，300ms）
+  void _open(int i) {
+    // 安全边界：当i越界时回退，防止_cItems/_pages数组长度不一致时崩溃
+    if (i < 0 || i >= _pages.length) return;
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => _pages[i],
+        transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
+        transitionDuration: const Duration(milliseconds: 300),
+      ),
+    );
+  }
+
+  /// 包裹入场动画：透明度+轻微上滑（6%偏移→归位）
+  Widget _f(int i, Widget w) => FadeTransition(
+    opacity: _anims[i],
+    child: SlideTransition(
+      position: Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero).animate(_anims[i]),
+      child: w,
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
-    if (!_loaded) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-
     final c = ThemeColors(ref.watch(themeProvider));
-
     return Scaffold(
-      backgroundColor: c.bgRoot,
-      appBar: AppBar(title: const Text('设置')),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
-        // ── 自定义人格 ──
-        const Text('自定义人格', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF8E8E93))),
-        const SizedBox(height: 4),
-        Text(
-          'Solvhen拥有完整的基底人格。自定义人格作为叠加层——为特定场景追加指令，不替换基底。',
-          style: TextStyle(fontSize: 11, color: c.textTertiary),
+        // 直接使用bgRoot，符合设置UI铁律：Scaffold背景不使用额外Container包裹
+        backgroundColor: c.bgRoot,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent, // Material 3 水波纹色消除
+          title: Text('设置', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: c.textPrimary, letterSpacing: -0.5)),
         ),
-        const SizedBox(height: 12),
-        _card([
-          // Active: none (base only)
-          _personaTile(null, '基底人格（无叠加）', 'Solvhen的完整人格：理性、怜悯、锋芒兼具', c,
-              active: _activePersona == null),
-
-          const SizedBox(height: 4),
-          if (_personas.isNotEmpty) ...[
-            ..._personas.map((p) => _personaTile(
-              p, p.name, p.prompt.isEmpty ? '（无描述）' : p.prompt,
-              c, active: p.id == _activePersona?.id,
-            )),
-            const SizedBox(height: 4),
-          ],
-
-          // Add persona button
-          OutlinedButton.icon(
-            onPressed: _addPersona,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('新建人格'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: c.accent,
-              side: BorderSide(color: c.accent.withValues(alpha: 0.3)),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        body: Stack(children: [
+          // WebView画布背景层 — IgnorePointer确保不拦截触摸事件
+          const IgnorePointer(child: WebViewCanvas()),
+          // 竖排列表 — 符合设置UI铁律：不使用TabBar，纯push导航
+          ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+            children: List.generate(_items.length, (i) {
+              final item = _items[i];
+              return _f(i, Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _tile(item.icon, item.title, item.subtitle, () => _open(i), c),
+              ));
+            }),
             ),
-          ),
-        ], c),
+            ]),
+            );
+  }
 
-        const SizedBox(height: 24),
-
-        // ── API ──
-        const Text('API 配置', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF8E8E93))),
-        const SizedBox(height: 12),
-        _card([
-          _field('API 地址', 'https://api.deepseek.com/v1', _urlCtrl, c),
-          const SizedBox(height: 14),
-          _field('API Key', 'sk-...', _keyCtrl, c, obscure: _hideKey, suffix: IconButton(
-            icon: Icon(_hideKey ? Icons.visibility_off : Icons.visibility, size: 18, color: c.textTertiary),
-            onPressed: () => setState(() => _hideKey = !_hideKey),
-          )),
-          const SizedBox(height: 14),
-          _field('模型名称', 'deepseek-v4-pro', _modelCtrl, c),
-          const SizedBox(height: 14),
-          // Context window note
-          Container(
-            padding: const EdgeInsets.all(10),
+  /// 玻璃态设置卡片：毛玻璃背景 + 主题色渐变图标 + 右箭头
+  ///
+  /// [icon] 左侧图标, [title] 标题, [subtitle] 副标题, [onTap] 点击回调, [c] 主题色
+  Widget _tile(IconData icon, String title, String subtitle, VoidCallback onTap, ThemeColors c) {
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        // ⚠️ BackdropFilter性能坑：sigmaX/Y=12会触发逐帧高斯模糊，低端机可降至8
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
-              color: c.accent.withValues(alpha: 0.06),
-              borderRadius: BorderRadius.circular(10),
+              color: c.glassBg,                    // 半透明玻璃底色
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: c.glassBorder, width: 0.5), // 0.5px细边框 — 玻璃态关键
+              boxShadow: c.shadowCard,
             ),
             child: Row(children: [
-              Icon(Icons.info_outline, size: 14, color: c.accent),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '上下文窗口: ${_fmtContextWindow(_modelCtrl.text)}。聊天顶部会显示用量。',
-                  style: TextStyle(fontSize: 12, color: c.textSecondary),
+              // 图标容器 — 主题渐变色背景
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [c.accent, c.accent.withValues(alpha: 0.7)]),
+                  borderRadius: BorderRadius.circular(14),
                 ),
+                child: Icon(icon, size: 22, color: Colors.white),
               ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: c.textPrimary)),
+                  const SizedBox(height: 3),
+                  Text(subtitle, style: TextStyle(fontSize: 13, color: c.textTertiary)),
+                ]),
+              ),
+              Icon(Icons.chevron_right_rounded, size: 22, color: c.textPlaceholder),
             ]),
           ),
-          const SizedBox(height: 14),
-          Wrap(spacing: 8, runSpacing: 8, children: [
-            _chip('DeepSeek V4 Pro', 'https://api.deepseek.com/v1', 'deepseek-v4-pro', c),
-            _chip('DeepSeek V4 Flash', 'https://api.deepseek.com/v1', 'deepseek-v4-flash', c),
-            _chip('DeepSeek R1', 'https://api.deepseek.com/v1', 'deepseek-reasoner', c),
-            _chip('豆包', 'https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-2-0-pro-260215', c),
-            _chip('通义千问', 'https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen-plus', c),
-            _chip('ChatGPT', 'https://api.openai.com/v1', 'gpt-4o-mini', c),
-          ]),
-          const SizedBox(height: 12),
-          Align(alignment: Alignment.centerRight, child: FilledButton(
-            onPressed: _save,
-            style: FilledButton.styleFrom(backgroundColor: c.accent, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-            child: const Text('保存'),
-          )),
-        ], c),
-
-        const SizedBox(height: 24),
-
-        // ── 更新日志 ──
-        const Text('更新日志', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF8E8E93))),
-        const SizedBox(height: 12),
-        _card([
-          for (final entry in _changelog)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(entry.$1, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.accent)),
-                const SizedBox(height: 2),
-                ...entry.$2.map((line) => Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 2),
-                  child: Text('• $line', style: TextStyle(fontSize: 12, color: c.textSecondary, height: 1.5)),
-                )),
-              ]),
-            ),
-        ], c),
-      ]),
-    );
-  }
-
-  String _fmtContextWindow(String model) {
-    final tokens = DB.contextWindow(model);
-    if (tokens >= 1000) return '${(tokens / 1000).toStringAsFixed(0)}K tokens';
-    return '$tokens tokens';
-  }
-
-  Widget _personaTile(Persona? p, String name, String desc, ThemeColors c, {bool active = false}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: InkWell(
-        onTap: () => _activatePersona(p),
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            color: active ? c.accent.withValues(alpha: 0.08) : c.bgRoot,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: active ? c.accent : c.separator, width: active ? 1.5 : 1),
-          ),
-          child: Row(children: [
-            Icon(
-              active ? Icons.radio_button_checked : Icons.radio_button_off,
-              size: 20, color: active ? c.accent : c.textTertiary,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(name, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600,
-                    color: active ? c.accent : c.textPrimary)),
-                Text(
-                  desc.length > 60 ? '${desc.substring(0, 60)}…' : desc,
-                  style: TextStyle(fontSize: 12, color: c.textSecondary),
-                ),
-              ]),
-            ),
-            if (p != null)
-              InkWell(
-                onTap: () => _editPersona(p),
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(Icons.edit_outlined, size: 16, color: c.textTertiary),
-                ),
-              ),
-            if (p != null)
-              InkWell(
-                onTap: () async {
-                  final confirm = await showDialog<bool>(
-                    context: context,
-                    builder: (_) => AlertDialog(
-                      title: const Text('删除人格'),
-                      content: Text('确定删除「${p.name}」？'),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-                        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('删除', style: TextStyle(color: Colors.red))),
-                      ],
-                    ),
-                  );
-                  if (confirm == true) {
-                    await DB.deletePersona(p.id!);
-                    if (p.id == _activePersona?.id) {
-                      await DB.activatePersona(null);
-                      _activePersona = null;
-                    }
-                    _personas = await DB.getPersonas();
-                    setState(() {});
-                  }
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Icon(Icons.delete_outline, size: 16, color: c.textTertiary),
-                ),
-              ),
-          ]),
         ),
       ),
-    );
-  }
-
-  Widget _card(List<Widget> children, ThemeColors c) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: c.bgCardSolid,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: c.shadowSm,
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: children),
-    );
-  }
-
-  Widget _field(String label, String hint, TextEditingController ctrl, ThemeColors c,
-      {bool obscure = false, Widget? suffix, int maxLines = 1}) {
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: c.textSecondary)),
-      const SizedBox(height: 6),
-      TextField(
-        controller: ctrl,
-        obscureText: obscure,
-        maxLines: maxLines,
-        minLines: 1,
-        style: TextStyle(fontSize: 14, color: c.textPrimary),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: TextStyle(fontSize: 14, color: c.textPlaceholder),
-          suffixIcon: suffix,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: c.separator)),
-          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: c.accent)),
-          filled: true, fillColor: c.bgRoot,
-        ),
-      ),
-    ]);
-  }
-
-  Widget _chip(String label, String url, String model, ThemeColors c) {
-    return ActionChip(
-      label: Text(label, style: const TextStyle(fontSize: 12)),
-      backgroundColor: c.accent.withValues(alpha: 0.08),
-      side: BorderSide.none,
-      onPressed: () => _preset(label, url, model),
-    );
+      );
   }
 }

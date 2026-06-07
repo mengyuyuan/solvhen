@@ -1,5 +1,10 @@
-/// Executes slash commands — handles theme, system, file operations.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 命令执行器——解析和执行用户输入的命令（/开头）
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
 
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +17,8 @@ import '../tools/tool_utils.dart';
 import '../services/database_service.dart';
 import '../screens/chat_provider.dart';
 
+/// 命令执行器——解析和执行用户输入的命令（/开头）
+/// 支持：/new /persona /theme /model /clear /help 等
 class CommandExecutor {
 
   /// Execute a slash action and return a result message.
@@ -23,8 +30,7 @@ class CommandExecutor {
       switch (cmd) {
       // ── 对话 ──
       case 'new':
-        final oldConvId = ref.read(chatProvider).conversationId;
-        final conv = await DB.createConversation();
+            final conv = await DB.createConversation();
         // Switch to the new conversation — this also triggers consolidation
         await ref.read(chatProvider.notifier).switchConversation(conv.id!);
         return '✅ 已创建新对话 #${conv.id}。上一段对话的记忆已保存。';

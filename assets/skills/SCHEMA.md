@@ -38,7 +38,7 @@ description: 一句话描述    # 可选，供人类阅读
 | [[subagent-driven-dev.md]] | 7 | delegate_task 使用方式、toolsets 选择、并行规则 |
 | [[dart-flutter-patterns.md]] | 6 | Flutter/Dart 常用模式、性能约定 |
 | [[conversation-style.md]] | 5 | 对话节奏控制、毒舌分寸、沉默使用 |
-| [[tool-usage.md]] | 5 | 34 个工具分类、调用原则、多 agent 委派 |
+| [[tool-usage.md]] | 5 | 工具分类、调用原则、多 agent 委派 |
 | [[ui-expression.md]] | 3 | 界面工具使用时机、性格驱动的表达强度 |
 
 ## Cross-References

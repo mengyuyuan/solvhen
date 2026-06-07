@@ -1,8 +1,16 @@
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// API通信服务——流式对话、函数调用、记忆整合，含模型链动态路由+错误分类
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import '../models/message.dart';
+import '../models/llm_provider.dart';
 import 'database_service.dart';
 import 'tool_executor.dart';
 
@@ -101,6 +109,31 @@ class ApiService {
     return null;
   }
 
+  /// Resolve active model from chain config, falling back to legacy config.
+  Future<({String url, String model, String key})> _resolveChain() async {
+    final cfg = await DB.getConfig();
+    final raw = cfg['llm_chain'];
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final chain = LlmChainConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final slot = chain.activeSlot;
+        if (slot != null) {
+          final vendor = findVendor(slot.vendorId);
+          final url = slot.customUrl?.isNotEmpty == true
+              ? slot.customUrl!
+              : (vendor?.defaultUrl ?? cfg['base_url'] ?? 'https://api.deepseek.com/v1');
+          final model = slot.modelId;
+          final key = slot.apiKey?.isNotEmpty == true ? slot.apiKey! : (cfg['api_key'] ?? '');
+          return (url: '$url/chat/completions', model: model, key: key);
+        }
+      } catch (_) {}
+    }
+    final url = '${cfg['base_url']}/chat/completions';
+    final model = cfg['model'] ?? 'deepseek-v4-pro';
+    final key = cfg['api_key'] ?? '';
+    return (url: url, model: model, key: key);
+  }
+
   /// Streaming chat — returns full content via onChunk callback.
   /// Returns (content, api usage). Usage may be null for streaming.
   /// Throws typed exceptions on API errors.
@@ -110,22 +143,19 @@ class ApiService {
     required String userMessage,
     void Function(String chunk)? onChunk,
   }) async {
-    final cfg = await DB.getConfig();
-    final url = '${cfg['base_url']}/chat/completions';
-    final key = cfg['api_key'] ?? '';
-    final model = cfg['model'] ?? 'deepseek-v4-pro';
-    if (key.isEmpty) throw ApiAuthException('请先设置API Key');
+    final chain = await _resolveChain();
+    if (chain.key.isEmpty) throw ApiAuthException('请先设置API Key');
 
     final msgs = _buildMessages(systemPrompt, history, userMessage);
 
     Response<dynamic> resp;
     try {
-      resp = await dio.post(url,
+      resp = await dio.post(chain.url,
         options: Options(
-          headers: {'Authorization': 'Bearer $key'},
+          headers: {'Authorization': 'Bearer ${chain.key}'},
           responseType: ResponseType.stream,
         ),
-        data: {'model': model, 'messages': msgs, 'stream': true, 'temperature': 0.8, 'max_tokens': 2048},
+        data: {'model': chain.model, 'messages': msgs, 'stream': true, 'temperature': 0.8, 'max_tokens': 2048},
       );
     } on DioException catch (e) {
       final errMsg = e.type == DioExceptionType.connectionTimeout
@@ -171,16 +201,13 @@ class ApiService {
     required List<Map<String, dynamic>> tools,
     int maxTokens = 4096,
   }) async {
-    final cfg = await DB.getConfig();
-    final url = '${cfg['base_url']}/chat/completions';
-    final key = cfg['api_key'] ?? '';
-    final model = cfg['model'] ?? 'deepseek-v4-pro';
-    if (key.isEmpty) throw ApiAuthException('请先设置API Key');
+    final chain = await _resolveChain();
+    if (chain.key.isEmpty) throw ApiAuthException('请先设置API Key');
 
     final msgs = _buildMessages(systemPrompt, history, userMessage);
 
     final body = <String, dynamic>{
-      'model': model,
+      'model': chain.model,
       'messages': msgs,
       'stream': false,
       'temperature': 0.8,
@@ -193,8 +220,8 @@ class ApiService {
 
     Response resp;
     try {
-      resp = await dio.post(url,
-        options: Options(headers: {'Authorization': 'Bearer $key'}),
+      resp = await dio.post(chain.url,
+        options: Options(headers: {'Authorization': 'Bearer ${chain.key}'}),
         data: body,
       );
     } on DioException catch (e) {
@@ -236,7 +263,7 @@ class ApiService {
         if (kDebugMode) debugPrint('[API-XML] parsed ${parsedFromXml.length} tool calls from XML');
         toolCalls = parsedFromXml;
         content = ToolExecutor.stripToolCallsFromContent(content);
-        rawToolCalls = toolCalls!.map((tc) => {
+        rawToolCalls = toolCalls.map((tc) => {
           'id': tc.id,
           'type': 'function',
           'function': {'name': tc.name, 'arguments': tc.arguments},
@@ -285,16 +312,14 @@ class ApiService {
     required String transcript,
     String model = 'deepseek-v4-flash',
   }) async {
-    final cfg = await DB.getConfig();
-    final url = '${cfg['base_url']}/chat/completions';
-    final key = cfg['api_key'] ?? '';
-    if (key.isEmpty) return '{}';
+    final chain = await _resolveChain();
+    if (chain.key.isEmpty) return '{}';
 
     try {
-      final resp = await dio.post(url,
-        options: Options(headers: {'Authorization': 'Bearer $key'}),
+      final resp = await dio.post(chain.url,
+        options: Options(headers: {'Authorization': 'Bearer ${chain.key}'}),
         data: {
-          'model': model,
+          'model': chain.model,
           'messages': [
             {'role': 'system', 'content': systemPrompt},
             {'role': 'user', 'content': transcript},

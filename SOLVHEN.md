@@ -15,7 +15,7 @@ Solvhen 是一个运行在 Android 上的 AI 手机智能体。
 |------|-----|
 | 框架 | Flutter + Dart |
 | 状态管理 | Riverpod |
-| 数据库 | SQLite (sqflite), WAL 模式, v7 |
+| 数据库 | SQLite (sqflite), WAL 模式, v10 |
 | 网络 | dio (SSE 流式 + 非流式 function calling) |
 | 原生桥接 | MethodChannel (`solvhen/system`) |
 | 目标 | Android APK (debug) |
@@ -60,7 +60,7 @@ lib/
 │   └── settings_screen.dart          # 设置: 人格/API/技能
 ├── services/
 │   ├── api_service.dart              # 双模 API: chatStream(SSE) + chatWithTools(非流式)
-│   ├── database_service.dart         # SQLite v7: 对话/消息/人格/配置/记忆/技能
+│   ├── database_service.dart         # SQLite v10: 对话/消息/人格/配置/重型记忆/技能/语音
 │   ├── prompt_builder.dart           # 系统提示词组装器
 │   ├── tool_executor.dart            # 工具执行引擎: 并行/串行/超时/截断
 │   └── sub_agent.dart                # 子 agent 派发器: 隔离上下文+反递归
@@ -130,7 +130,7 @@ chat_screen.dart → main.dart
 
 `ToolRegistry` 是单例。每个 `tools_*.dart` 在 import 时调用 `registry.register(ToolEntry(...))`。
 `main.dart` 在 `runApp()` 前导入所有工具模块。
-工具总数：**36** 个。
+工具总览：工具数量动态增长（由 `tools/*.dart` 文件在 import 时自动注册）。
 
 ### 工具条目结构
 

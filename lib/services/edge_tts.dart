@@ -1,8 +1,16 @@
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// Edge TTS实现——微软Edge语音合成（国内网络下不可用，作为备用引擎）
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 import 'dart:async';
 import 'package:dio/dio.dart';
 
-/// Edge TTS — Microsoft's free neural TTS (200+ voices, SSML, streaming-ready).
-/// No API key needed. Uses the same backend as Azure Cognitive Services.
+/// Edge TTS引擎实现——微软Edge语音合成
+/// ⚠️ 国内网络不可用（speech.platform.bing.com被墙），仅作备用引擎
+/// 可用音色：小小/云希/小艺/云浩/云霞/云健
 class EdgeTtsService {
   static final EdgeTtsService _instance = EdgeTtsService._();
   factory EdgeTtsService() => _instance;

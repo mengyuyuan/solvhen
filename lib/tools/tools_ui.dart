@@ -1,6 +1,6 @@
-/// UI control tools — agent freely modifies its own interface.
-/// Tools: animate, draw_expression, spawn_particle, modify_appearance,
-/// screen_mood, layout_gesture, typewriter_reveal
+/// Solvhen AI手机智能体 — UI操作工具集
+/// 提供动画、表情、粒子、外观修改、HTML渲染、JS执行等界面控制能力。
+/// 工具通过 UIController 和 WebViewCanvasController 驱动 Flutter UI。
 library;
 
 import 'dart:convert';
@@ -12,10 +12,19 @@ import '../screens/ui_controller.dart';
 import '../screens/webview_canvas.dart';
 import 'package:flutter/material.dart';
 
+/// 注册UI操作工具集
+/// 工具：screen_mood(屏幕情绪)/bg_effects(背景效果)/render_html(WebView画布)/
+///       particles(粒子密度)/get_mood(当前UI状态)
+/// ⚠️ bg_effects不是预设枚举——AI用particles/poly/grid/pulse_ring/scanlines
+/// 五条绘制原语自由组合，Canvas套壳架构：Base层→Canvas层→UI层
 void registerUITools() {
   final registry = ToolRegistry();
   final ui = UIController();
 
+  // ═══════════════════════════════════════════════════════════
+  // animate — 关键帧动画序列
+  // 支持多个 UI 目标元素的 scale/rotate/translate/opacity/blur 动画
+  // ═══════════════════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'animate',
     toolset: 'ui',
@@ -53,6 +62,7 @@ curve: easeIn | easeOut | easeInOut | linear | bounce
     },
     handler: (args) async {
       final target = parseArgString(args['target']);
+      // 解析关键帧数组，使用安全类型转换避免 LLM 传入非预期类型导致崩溃
       final kfs = parseArgList(args['keyframes']).map((k) {
         final m = k as Map<String, dynamic>;
         return Keyframe(
@@ -60,7 +70,7 @@ curve: easeIn | easeOut | easeInOut | linear | bounce
           from: parseArgDouble(m['from'], 0),
           to: parseArgDouble(m['to'], 1),
           duration: parseArgOptionalInt(m['duration']) ?? 300,
-          curve: m['curve'] as String?,
+          curve: parseArgString(m['curve']), // 使用 parseArgString 而非 as String? 防止类型错误
         );
       }).toList();
       ui.animate(AnimationStep(target: target, keyframes: kfs));
@@ -68,6 +78,10 @@ curve: easeIn | easeOut | easeInOut | linear | bounce
     },
   ));
 
+  // ═══════════════════════════════════════════════════════════
+  // draw_expression — 在头像画布上绘制表情
+  // 通过操作序列控制眼睛、嘴巴、眉毛、光晕等元素
+  // ═══════════════════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'draw_expression',
     toolset: 'ui',
@@ -100,6 +114,7 @@ commands: [{op, ...}, ...]
     },
     handler: (args) async {
       final cmds = parseArgList(args['commands']);
+      // 从空白表情开始，逐个命令叠加——每个 merge 只覆盖非 null 字段
       var expr = const AvatarExpressionData();
       for (final c in cmds) {
         final m = c as Map<String, dynamic>;
@@ -126,6 +141,8 @@ commands: [{op, ...}, ...]
             final colorHex = m['color'] as String?;
             expr = expr.merge(AvatarExpressionData(
               glowIntensity: (m['intensity'] as num?)?.toDouble(),
+              // 注意：_parseColor 与 tools_theme.dart 中的同名函数逻辑相同
+              // 后续应提取到 tool_utils.dart 中统一管理，消除重复
               glowColor: colorHex != null ? _parseColor(colorHex) : null,
             ));
             break;
@@ -139,6 +156,10 @@ commands: [{op, ...}, ...]
     },
   ));
 
+  // ═══════════════════════════════════════════════════════════
+  // spawn_particle — 临时粒子效果
+  // 表达情绪的视觉方式：爱心、星星、火花等
+  // ═══════════════════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'spawn_particle',
     toolset: 'ui',
@@ -175,6 +196,10 @@ color: #hex颜色, count: 粒子数量, duration: 持续时间(ms)
     },
   ));
 
+  // ═══════════════════════════════════════════════════════════
+  // modify_appearance — 修改界面元素外观
+  // 支持 backdrop（背景色+暗角）、avatar/input_bar/title（透明度+缩放）
+  // ═══════════════════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'modify_appearance',
     toolset: 'ui',
@@ -201,6 +226,7 @@ backdrop: color + blur(暗角强度)
     handler: (args) async {
       final target = parseArgString(args['target']);
       final color = args['color'] as String?;
+      // backdrop 特殊处理：颜色应用到背景，blur 参数控制暗角强度（除以10归一化到0~1）
       if (target == 'backdrop') {
         ui.setScreenMood(ScreenMood(
           bgTop: color != null ? _parseColor(color) : null,
@@ -209,6 +235,7 @@ backdrop: color + blur(暗角强度)
               ? parseArgDouble(args['blur'], 0) / 10.0 : null,
         ));
       }
+      // 透明度/缩放通过动画实现，使用默认 from=1 做平滑过渡
       final kfs = <Keyframe>[];
       if (args['scale'] != null) kfs.add(Keyframe(prop: 'scale', from: 1, to: parseArgDouble(args['scale'], 1)));
       if (args['opacity'] != null) kfs.add(Keyframe(prop: 'opacity', from: 1, to: parseArgDouble(args['opacity'], 1)));
@@ -217,7 +244,10 @@ backdrop: color + blur(暗角强度)
     },
   ));
 
-
+  // ═══════════════════════════════════════════════════════════
+  // layout_gesture — UI 微表情/体态动作
+  // 通过预设的动画序列表达情绪（歪头、靠近、后退等）
+  // ═══════════════════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'layout_gesture',
     toolset: 'ui',
@@ -240,7 +270,8 @@ gesture: tilt_head | lean_in | step_back | nod | shrug | sigh | pacing | waiting
   ));
 
   // ═══════════════════════════════════════════════
-  // render_html — Solvhen's HTML canvas
+  // render_html — Solvhen's HTML canvas（视觉输出主通道）
+  // 所有背景、图表、动画、卡片等视觉操作都走这里
   // ═══════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'render_html',
@@ -285,33 +316,36 @@ render_html({html:"<div>你的代码</div>"})
       final mode = (args['mode'] as String?) ?? 'replace';
       String? html = args['html'] as String?;
 
-      // Auto-fallback for very long HTML: write to temp file to avoid
-      // tool-call JSON truncation and context-window pollution.
+      // 长HTML自动写入临时文件，避免工具调用JSON截断和上下文污染
+      // 注意：这里先写文件再渲染，如果渲染失败文件会残留，但下次会被覆盖
       const maxInline = 2000;
       if (html != null && html.length > maxInline) {
         try {
           final appDir = await getApplicationDocumentsDirectory();
-          final tmpFile = File('${appDir.path}/solvhen_files/canvas/auto_tmp.html');
+          final canvasDir = '${appDir.path}/solvhen_files/canvas';
+          final tmpFile = File('$canvasDir/auto_tmp.html');
           await tmpFile.parent.create(recursive: true);
           await tmpFile.writeAsString(html);
+          // 使用 WebViewCanvasController 单例渲染（注意：每次调用创建新实例，
+          // 如果 Controller 内部持有资源未释放可能导致泄漏——后续应改为单例模式）
           await WebViewCanvasController().renderHtml(html, mode: mode);
           return jsonEncode({
             'rendered': true,
             'mode': mode,
             'size': html.length,
             'stored': 'canvas/auto_tmp.html',
-            'note': '长HTML自动写入文件渲染，避免参数截断。后续修改请用 file 参数。',
+            'note': '长HTML自动写入文件并渲染，避免参数截断。后续修改请用 file 参数。',
           });
         } catch (e) {
           return jsonEncode({'error': '自动保存长HTML失败: $e'});
         }
       }
 
-      // If html not directly provided, try reading from file
+      // 如果未直接提供 html，尝试从文件读取
       if (html == null || html.isEmpty) {
         final filePath = args['file'] as String?;
         if (filePath != null && filePath.isNotEmpty) {
-          // Normalize path to prevent traversal (../ attacks)
+          // 路径规范化：过滤 .. 防止目录遍历攻击
           String safePath = filePath;
           if (safePath.contains('..')) {
             final segments = safePath.split(RegExp(r'[/\\]'))
@@ -337,6 +371,7 @@ render_html({html:"<div>你的代码</div>"})
         }
       }
 
+      // 既没有 html 也没有有效 file 路径
       if (html == null || html.isEmpty) {
         return jsonEncode({
           'error': '缺少内容',
@@ -347,6 +382,7 @@ render_html({html:"<div>你的代码</div>"})
       try {
         await WebViewCanvasController().renderHtml(html, mode: mode);
       } catch (e) {
+        // 截断错误消息防止返回过长
         return jsonEncode({'rendered': false, 'error': '画布未就绪，请重试: ${e.toString().substring(0, 100)}'});
       }
       return jsonEncode({
@@ -358,7 +394,7 @@ render_html({html:"<div>你的代码</div>"})
   ));
 
   // ═══════════════════════════════════════════════
-  // eval_js — run JS in the WebView (debug tool)
+  // eval_js — 在 WebView 中执行 JavaScript（调试工具）
   // ═══════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'eval_js',
@@ -390,6 +426,9 @@ render_html({html:"<div>你的代码</div>"})
     },
   ));
 
+  // ═══════════════════════════════════════════════
+  // typewriter_reveal — 控制回复打字机效果
+  // ═══════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'typewriter_reveal',
     toolset: 'ui',
@@ -410,10 +449,31 @@ render_html({html:"<div>你的代码</div>"})
       return jsonEncode({'typewriter': args['enable']});
     },
   ));
+
+  // ═══════════════════════════════════════════════
+  // clear_canvas — 清空 WebView 画布
+  // ═══════════════════════════════════════════════
+  registry.register(ToolEntry(
+    name: 'clear_canvas',
+    toolset: 'ui',
+    schema: {
+      'name': 'clear_canvas',
+      'description': '清空WebView画布，恢复透明背景。用于移除之前的render_html渲染内容。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      await WebViewCanvasController().clearCanvas();
+      return jsonEncode({'cleared': true});
+    },
+  ));
 }
 
+/// 从十六进制字符串解析 Flutter Color。
+/// 支持 #RRGGBB 和 #AARRGGBB 格式，也支持不带 # 的 6位或8位 hex。
+/// 注意：与 tools_theme.dart 中的 _parseColor 功能重复，后续应合并到 tool_utils.dart。
 Color _parseColor(String hex) {
   hex = hex.replaceFirst('#', '');
+  // 6位hex自动补全不透明alpha通道（FF），确保颜色可见
   if (hex.length == 6) hex = 'FF$hex';
   return Color(int.parse(hex, radix: 16));
 }

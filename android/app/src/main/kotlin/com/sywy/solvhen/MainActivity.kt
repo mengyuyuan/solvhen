@@ -84,6 +84,146 @@ class MainActivity : FlutterActivity() {
                         val enable = call.argument<Boolean>("enable") ?: true
                         result.success(keepScreenOn(enable))
                     }
+                    // ═══ 无障碍服务操作 ═══
+                    "isAccessibilityEnabled" -> {
+                        result.success(mapOf("enabled" to SolvhenAccessibilityService.isEnabled(this)))
+                    }
+                    "openAccessibilitySettings" -> {
+                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        result.success(mapOf("opened" to true))
+                    }
+                    "inputTap" -> {
+                        val x = call.argument<Double>("x")?.toFloat() ?: 0f
+                        val y = call.argument<Double>("y")?.toFloat() ?: 0f
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启，请到设置→无障碍→Solvhen中开启"))
+                        } else {
+                            svc.performClick(x, y) { ok ->
+                                result.success(mapOf("clicked" to ok, "x" to x, "y" to y))
+                            }
+                        }
+                    }
+                    "inputSwipe" -> {
+                        val x1 = call.argument<Double>("x1")?.toFloat() ?: 0f
+                        val y1 = call.argument<Double>("y1")?.toFloat() ?: 0f
+                        val x2 = call.argument<Double>("x2")?.toFloat() ?: 0f
+                        val y2 = call.argument<Double>("y2")?.toFloat() ?: 0f
+                        val duration = call.argument<Long>("duration") ?: 300L
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            svc.performSwipe(x1, y1, x2, y2, duration) { ok ->
+                                result.success(mapOf("swiped" to ok))
+                            }
+                        }
+                    }
+                    "inputText" -> {
+                        val text = call.argument<String>("text") ?: ""
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            svc.inputText(text) { ok ->
+                                result.success(mapOf("input" to ok, "text" to text))
+                            }
+                        }
+                    }
+                    "pressBack" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            result.success(mapOf("back" to svc.pressBack()))
+                        }
+                    }
+                    "pressHome" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            result.success(mapOf("home" to svc.pressHome()))
+                        }
+                    }
+                    "pressEnter" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            result.success(mapOf("enter" to svc.pressEnter()))
+                        }
+                    }
+                    "pressRecents" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            result.success(mapOf("recents" to svc.pressRecents()))
+                        }
+                    }
+                    "longPress" -> {
+                        val x = call.argument<Double>("x")?.toFloat() ?: 0f
+                        val y = call.argument<Double>("y")?.toFloat() ?: 0f
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            svc.performLongClick(x, y) { ok ->
+                                result.success(mapOf("longPressed" to ok, "x" to x, "y" to y))
+                            }
+                        }
+                    }
+                    "getScreenText" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            result.success(mapOf("elements" to svc.getScreenText()))
+                        }
+                    }
+                    "findText" -> {
+                        val text = call.argument<String>("text") ?: ""
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            result.success(mapOf("matches" to svc.findText(text)))
+                        }
+                    }
+                    "clickText" -> {
+                        val text = call.argument<String>("text") ?: ""
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            svc.clickText(text) { ok ->
+                                result.success(mapOf("clicked" to ok, "text" to text))
+                            }
+                        }
+                    }
+                    // ═══ 通知监听 ═══
+                    "getNotifications" -> {
+                        val filter = call.argument<String>("filter") ?: ""
+                        val notifications = SolvhenNotificationListener.getRecentNotifications(filter)
+                        val enabled = SolvhenNotificationListener.isEnabled(this)
+                        result.success(mapOf(
+                            "notifications" to notifications,
+                            "count" to notifications.size,
+                            "service_enabled" to enabled
+                        ))
+                    }
+                    "isNotificationListenerEnabled" -> {
+                        result.success(mapOf("enabled" to SolvhenNotificationListener.isEnabled(this)))
+                    }
+                    "openNotificationListenerSettings" -> {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        result.success(mapOf("opened" to true))
+                    }
+                    "clearNotifications" -> {
+                        SolvhenNotificationListener.clearNotifications()
+                        result.success(mapOf("cleared" to true))
+                    }
                     else -> result.notImplemented()
                 }
             } catch (e: Exception) {

@@ -1,4 +1,10 @@
-/// A user-created custom persona that layers on top of the base Solvhen personality.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 人格模型——用户自定义的附加人格，在基础Solvhen人格之上叠加指令
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 /// Each persona is additive — base personality is always present, personas add instructions.
 class Persona {
   final int? id;

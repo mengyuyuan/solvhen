@@ -1,16 +1,26 @@
-/// System operation tools — Solvhen reads and controls the phone.
-/// Backed by NativeBridge → Android MethodChannel.
+/// Solvhen AI手机智能体 — 系统操作工具集
+/// 通过 NativeBridge → Android MethodChannel 实现手机系统控制。
+/// 功能：时间、电量、音量、亮度、WiFi/蓝牙、应用管理、剪贴板、手电筒、锁屏、日志读取。
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'tool_registry.dart';
 import 'tool_utils.dart';
 import 'native_bridge.dart';
+import '../services/onebot_bridge.dart' as ob;
+import '../services/database_service.dart' as dbs;
 
+/// 注册系统操作工具集
+/// 工具：get_clipboard/set_clipboard(剪切板)/toggle_flashlight(闪光灯)/
+///       lock_screen(锁屏)/keep_screen_on(亮屏)/list_installed_apps(应用列表)/
+///       open_app(打开应用)/eval_math(数学计算)/get_device_info(设备信息)等
+/// ⚠️ 安全：eval_math使用正则白名单而非eval；filter regex禁用shell特殊字符
 void registerSystemTools() {
   final registry = ToolRegistry();
 
+  // ── get_time — 获取当前时间 ──
   registry.register(ToolEntry(
     name: 'get_time',
     toolset: 'system',
@@ -23,11 +33,13 @@ void registerSystemTools() {
       return jsonEncode({
         'time': now.toIso8601String(),
         'hour': now.hour, 'minute': now.minute,
+        // Dart 的 weekday: 1=周一, 7=周日。直接映射中文。
         'weekday': ['一', '二', '三', '四', '五', '六', '日'][now.weekday - 1],
       });
     },
   ));
 
+  // ── get_battery — 获取电池状态 ──
   registry.register(ToolEntry(
     name: 'get_battery',
     toolset: 'system',
@@ -38,6 +50,7 @@ void registerSystemTools() {
     handler: (args) async => jsonEncode(await NativeBridge.getBattery()),
   ));
 
+  // ── get_volume — 获取媒体音量 ──
   registry.register(ToolEntry(
     name: 'get_volume',
     toolset: 'system',
@@ -48,6 +61,7 @@ void registerSystemTools() {
     handler: (args) async => jsonEncode(await NativeBridge.getVolume()),
   ));
 
+  // ── set_volume — 设置媒体音量 ──
   registry.register(ToolEntry(
     name: 'set_volume',
     toolset: 'system',
@@ -62,9 +76,11 @@ void registerSystemTools() {
       },
     },
     handler: (args) async =>
+        // clamp 保证值在合法范围内，防止 NativeBridge 收到非法值崩溃
         jsonEncode(await NativeBridge.setVolume(clampInt(parseArgInt(args['level'], 50), 0, 100))),
   ));
 
+  // ── get_brightness — 获取屏幕亮度 ──
   registry.register(ToolEntry(
     name: 'get_brightness',
     toolset: 'system',
@@ -75,6 +91,7 @@ void registerSystemTools() {
     handler: (args) async => jsonEncode(await NativeBridge.getBrightness()),
   ));
 
+  // ── set_brightness — 设置屏幕亮度 ──
   registry.register(ToolEntry(
     name: 'set_brightness',
     toolset: 'system',
@@ -92,6 +109,7 @@ void registerSystemTools() {
         jsonEncode(await NativeBridge.setBrightness(clampInt(parseArgInt(args['level'], 128), 0, 255))),
   ));
 
+  // ── toggle_wifi — 开关 WiFi ──
   registry.register(ToolEntry(
     name: 'toggle_wifi',
     toolset: 'system',
@@ -106,9 +124,11 @@ void registerSystemTools() {
       },
     },
     handler: (args) async =>
+        // _parseBool 兼容 DeepSeek XML 模式中 bool 被序列化为字符串 "true"/"false" 的情况
         jsonEncode(await NativeBridge.toggleWifi(_parseBool(args['enable']))),
   ));
 
+  // ── toggle_bluetooth — 开关蓝牙 ──
   registry.register(ToolEntry(
     name: 'toggle_bluetooth',
     toolset: 'system',
@@ -126,6 +146,7 @@ void registerSystemTools() {
         jsonEncode(await NativeBridge.toggleBluetooth(_parseBool(args['enable']))),
   ));
 
+  // ── open_app — 打开手机应用 ──
   registry.register(ToolEntry(
     name: 'open_app',
     toolset: 'system',
@@ -146,6 +167,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
       },
     },
     handler: (args) async {
+      // 兼容多种参数名（package/app/packageName），防止 LLM 使用非标准字段名
       final input = (args['package'] ?? args['app'] ?? args['packageName']) as String?;
       if (input == null || input.isEmpty) {
         return jsonEncode({'error': '缺少 package 参数', 'hint': '需要传入应用中文名或包名'});
@@ -155,6 +177,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     },
   ));
 
+  // ── list_installed_apps — 列出已安装应用（必须先调用此工具再 open_app）──
   registry.register(ToolEntry(
     name: 'list_installed_apps',
     toolset: 'system',
@@ -185,6 +208,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     )),
   ));
 
+  // ── set_ringer_mode — 设置响铃模式 ──
   registry.register(ToolEntry(
     name: 'set_ringer_mode',
     toolset: 'system',
@@ -202,6 +226,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
         jsonEncode(await NativeBridge.setRingerMode(args['mode'] as String)),
   ));
 
+  // ── get_device_info — 获取设备信息 ──
   registry.register(ToolEntry(
     name: 'get_device_info',
     toolset: 'system',
@@ -212,6 +237,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     handler: (args) async => jsonEncode(await NativeBridge.getDeviceInfo()),
   ));
 
+  // ── get_clipboard — 读取剪贴板 ──
   registry.register(ToolEntry(
     name: 'get_clipboard',
     toolset: 'system',
@@ -222,6 +248,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     handler: (args) async => jsonEncode(await NativeBridge.getClipboard()),
   ));
 
+  // ── set_clipboard — 写入剪贴板 ──
   registry.register(ToolEntry(
     name: 'set_clipboard',
     toolset: 'system',
@@ -239,6 +266,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
         jsonEncode(await NativeBridge.setClipboard(args['text'] as String)),
   ));
 
+  // ── toggle_flashlight — 开关手电筒 ──
   registry.register(ToolEntry(
     name: 'toggle_flashlight',
     toolset: 'system',
@@ -256,6 +284,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
         jsonEncode(await NativeBridge.toggleFlashlight(_parseBool(args['enable']))),
   ));
 
+  // ── lock_screen — 锁定屏幕 ──
   registry.register(ToolEntry(
     name: 'lock_screen',
     toolset: 'system',
@@ -266,6 +295,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     handler: (args) async => jsonEncode(await NativeBridge.lockScreen()),
   ));
 
+  // ── keep_screen_on — 保持屏幕常亮 ──
   registry.register(ToolEntry(
     name: 'keep_screen_on',
     toolset: 'system',
@@ -284,7 +314,7 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
   ));
 
   // ═══════════════════════════════════════════════
-  // logcat — read Android system logs (debug tool)
+  // logcat — 读取 Android 系统日志（调试工具）
   // ═══════════════════════════════════════════════
   registry.register(ToolEntry(
     name: 'logcat',
@@ -308,21 +338,25 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
       try {
         final lines = ((args['lines'] as int?) ?? 100).clamp(10, 500);
         final filter = (args['filter'] as String?) ?? '';
-        // Reject filter strings with shell metacharacters — security measure
-        if (RegExp(r'[`$(){};|&!<>]').hasMatch(filter)) {
-          return jsonEncode({'error': 'filter 包含不允许的特殊字符', 'hint': '仅支持字母、数字、冒号、点和管道符'});
+        // 安全措施：拒绝包含 Shell 特殊字符的 filter 字符串
+        // 注意：正则 [(`$(){};&!<>] 不包含 |，因此管道符被允许用于多关键词过滤
+        // 这是有意设计的——| 是合法的分隔符且不会导致命令注入
+        if (RegExp(r'[`$(){};&!<>]').hasMatch(filter)) {
+          return jsonEncode({'error': 'filter 包含不允许的特殊字符', 'hint': '仅支持字母、数字、冒号、点和管道符(|)'});
         }
-        // Run logcat and filter in pure Dart — no shell injection risk
+        // 使用纯 Dart 做过滤，不依赖 shell grep，消除注入风险
+        // runInShell: true 可能带来额外风险，但 filter 已经过验证
         final result = await Process.run('logcat', ['-d', '-t', lines.toString()],
             runInShell: true).timeout(const Duration(seconds: 15));
         var output = result.stdout.toString();
         if (filter.isNotEmpty) {
-          // Filter lines containing any of the pipe-separated terms
+          // 按 | 分割多个过滤词，每行只要包含任意一个词就保留
           final terms = filter.split('|').map((t) => t.trim()).where((t) => t.isNotEmpty);
           output = output.split('\n')
               .where((line) => terms.any((t) => line.contains(t)))
               .join('\n');
         }
+        // 截断超长输出，保留最后 8000 字符——最新日志通常更有价值
         final truncated = output.length > 8000
             ? output.substring(output.length - 8000)
             : output;
@@ -335,13 +369,357 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
       }
     },
   ));
+
+  // ═══════════════════════════════════════════════
+  // 无障碍服务工具 — AI操控应用内部UI
+  // ═══════════════════════════════════════════════
+
+  // ── input_tap — 点击屏幕坐标 ──
+  registry.register(ToolEntry(
+    name: 'input_tap',
+    toolset: 'system',
+    schema: {
+      'name': 'input_tap',
+      'description': '点击屏幕指定坐标。需先开启无障碍服务（设置→无障碍→Solvhen）。获取坐标：先用 get_screen_text 读屏幕内容，从返回的 bounds 中取x/y。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'x': {'type': 'number', 'description': 'X坐标'},
+          'y': {'type': 'number', 'description': 'Y坐标'},
+        },
+        'required': ['x', 'y'],
+      },
+    },
+    handler: (args) async {
+      final result = await NativeBridge.inputTap(
+        (args['x'] as num).toDouble(),
+        (args['y'] as num).toDouble(),
+      );
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── input_swipe — 滑动屏幕 ──
+  registry.register(ToolEntry(
+    name: 'input_swipe',
+    toolset: 'system',
+    schema: {
+      'name': 'input_swipe',
+      'description': '在屏幕上滑动。用于滚动列表、切换页面等。duration为滑动时长(毫秒)，默认300。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'x1': {'type': 'number', 'description': '起点X'},
+          'y1': {'type': 'number', 'description': '起点Y'},
+          'x2': {'type': 'number', 'description': '终点X'},
+          'y2': {'type': 'number', 'description': '终点Y'},
+          'duration': {'type': 'integer', 'description': '滑动时长(毫秒)，默认300'},
+        },
+        'required': ['x1', 'y1', 'x2', 'y2'],
+      },
+    },
+    handler: (args) async {
+      final result = await NativeBridge.inputSwipe(
+        (args['x1'] as num).toDouble(),
+        (args['y1'] as num).toDouble(),
+        (args['x2'] as num).toDouble(),
+        (args['y2'] as num).toDouble(),
+        duration: args['duration'] as int? ?? 300,
+      );
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── input_text — 向输入框输入文字 ──
+  registry.register(ToolEntry(
+    name: 'input_text',
+    toolset: 'system',
+    schema: {
+      'name': 'input_text',
+      'description': '向当前焦点的输入框输入文字。需要输入框已获得焦点（先用 input_tap 点击输入框）。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string', 'description': '要输入的文字'},
+        },
+        'required': ['text'],
+      },
+    },
+    handler: (args) async {
+      final result = await NativeBridge.inputText(args['text'] as String);
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── press_back — 按返回键 ──
+  registry.register(ToolEntry(
+    name: 'press_back',
+    toolset: 'system',
+    schema: {
+      'name': 'press_back',
+      'description': '按返回键。用于退出当前页面或弹窗。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.pressBack();
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── press_home — 按主页键 ──
+  registry.register(ToolEntry(
+    name: 'press_home',
+    toolset: 'system',
+    schema: {
+      'name': 'press_home',
+      'description': '按主页键回到桌面。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.pressHome();
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── get_screen_text — 读取屏幕内容 ──
+  registry.register(ToolEntry(
+    name: 'get_screen_text',
+    toolset: 'system',
+    schema: {
+      'name': 'get_screen_text',
+      'description': '读取当前屏幕上的所有可见文本和元素。返回每个元素的文字、是否可点击、坐标(bounds)。用于了解当前界面——找到按钮、输入框等。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.getScreenText();
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── find_text — 在屏幕上查找文字 ──
+  registry.register(ToolEntry(
+    name: 'find_text',
+    toolset: 'system',
+    schema: {
+      'name': 'find_text',
+      'description': '在当前屏幕上查找包含指定文字的元素。返回匹配元素的文字、坐标、是否可点击。比 get_screen_text 更高效——只返回匹配项。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string', 'description': '要查找的文字（支持部分匹配）'},
+        },
+        'required': ['text'],
+      },
+    },
+    handler: (args) async {
+      final result = await NativeBridge.findText(args['text'] as String);
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── click_text — 点击包含指定文字的元素 ──
+  registry.register(ToolEntry(
+    name: 'click_text',
+    toolset: 'system',
+    schema: {
+      'name': 'click_text',
+      'description': '查找并点击屏幕上包含指定文字的可点击元素。如 click_text("发送") 点击发送按钮。优先用这个而不是 input_tap——不需要坐标。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'text': {'type': 'string', 'description': '要点击的文字（如"发送"、"确定"、"微信"）'},
+        },
+        'required': ['text'],
+      },
+    },
+    handler: (args) async {
+      final result = await NativeBridge.clickText(args['text'] as String);
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── check_accessibility / open_accessibility — 无障碍服务管理 ──
+  registry.register(ToolEntry(
+    name: 'check_accessibility',
+    toolset: 'system',
+    schema: {
+      'name': 'check_accessibility',
+      'description': '检查无障碍服务是否已开启。如果未开启，用 open_accessibility_settings 直接跳到设置页。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.isAccessibilityEnabled();
+      return jsonEncode(result);
+    },
+  ));
+
+  registry.register(ToolEntry(
+    name: 'open_accessibility_settings',
+    toolset: 'system',
+    schema: {
+      'name': 'open_accessibility_settings',
+      'description': '直接打开系统无障碍设置页面。对方不用手动找——一键跳到设置→无障碍，然后找到Solvhen开启即可。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.openAccessibilitySettings();
+      return jsonEncode(result);
+    },
+  ));
+
+  // ═══════════════════════════════════════════════
+  // 补充高频工具
+  // ═══════════════════════════════════════════════
+
+  // ── press_enter — 发送回车/发送键 ──
+  registry.register(ToolEntry(
+    name: 'press_enter',
+    toolset: 'system',
+    schema: {
+      'name': 'press_enter',
+      'description': '向当前焦点输入框发送回车键（用于发送消息）。先点击输入框获得焦点，再调此工具。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.pressEnter();
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── press_recent — 最近任务 ──
+  registry.register(ToolEntry(
+    name: 'press_recent',
+    toolset: 'system',
+    schema: {
+      'name': 'press_recent',
+      'description': '打开最近任务列表。用于切换应用。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.pressRecents();
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── long_press — 长按 ──
+  registry.register(ToolEntry(
+    name: 'long_press',
+    toolset: 'system',
+    schema: {
+      'name': 'long_press',
+      'description': '长按屏幕指定坐标。用于弹出上下文菜单（如微信消息的"删除""转发"菜单）。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'x': {'type': 'number', 'description': 'X坐标'},
+          'y': {'type': 'number', 'description': 'Y坐标'},
+        },
+        'required': ['x', 'y'],
+      },
+    },
+    handler: (args) async {
+      final result = await NativeBridge.longPress(
+        (args['x'] as num).toDouble(),
+        (args['y'] as num).toDouble(),
+      );
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── scroll_up / scroll_down — 快捷滑动 ──
+  registry.register(ToolEntry(
+    name: 'scroll_up',
+    toolset: 'system',
+    schema: {
+      'name': 'scroll_up',
+      'description': '向上滚动（手指从下往上滑）。用于翻看聊天记录、浏览列表等。默认从屏幕中间偏下滑到中间偏上。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.inputSwipe(540, 1200, 540, 400, duration: 200);
+      return jsonEncode(result);
+    },
+  ));
+
+  registry.register(ToolEntry(
+    name: 'scroll_down',
+    toolset: 'system',
+    schema: {
+      'name': 'scroll_down',
+      'description': '向下滚动（手指从上往下滑）。',
+      'parameters': {'type': 'object', 'properties': {}, 'required': []},
+    },
+    handler: (args) async {
+      final result = await NativeBridge.inputSwipe(540, 400, 540, 1200, duration: 200);
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── get_notifications — 读取系统通知 ──
+  registry.register(ToolEntry(
+    name: 'get_notifications',
+    toolset: 'system',
+    schema: {
+      'name': 'get_notifications',
+      'description': '''读取最近收到的系统通知（微信/QQ等）。
+需要先在系统设置中开启"通知使用权"（会引导你打开设置页）。
+参数 filter 可按应用名过滤：'微信'/'QQ'/'企业微信' 或包名 'com.tencent.mm'。
+返回通知的标题、内容、时间、来源应用。最多30条。''',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'filter': {'type': 'string', 'description': '按应用名或包名过滤，如"微信"'}
+        }
+      }
+    },
+    handler: (args) async {
+      final filter = args['filter'] as String? ?? '';
+      final result = await NativeBridge.getNotifications(filter: filter);
+      // 如果服务未开启，引导用户打开设置
+      if (result['service_enabled'] != true) {
+        unawaited(NativeBridge.openNotificationListenerSettings());
+        return jsonEncode({
+          ...result,
+          'hint': '通知监听服务未开启，已为你打开设置页。请找到 Solvhen 并开启。'
+        });
+      }
+      return jsonEncode(result);
+    },
+  ));
+
+  // ── wait — 等待 ──
+  registry.register(ToolEntry(
+    name: 'wait',
+    toolset: 'system',
+    schema: {
+      'name': 'wait',
+      'description': '等待指定毫秒数。在操作之间加延迟——UI切换需要时间，太快会导致操作失败。建议每次操作后等待500-1000ms。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'ms': {'type': 'integer', 'description': '等待毫秒数。默认1000(1秒)，建议500-2000。'},
+        },
+        'required': [],
+      },
+    },
+    handler: (args) async {
+      final ms = args['ms'] as int? ?? 1000;
+      await Future.delayed(Duration(milliseconds: ms.clamp(100, 5000)));
+      return jsonEncode({'waited': ms});
+    },
+  ));
 }
 
-/// Resolve app name or package name to package name.
-/// Shared between tools_system.dart and command_executor.dart.
+/// 将应用中文名或包名解析为包名。
+/// 用于 tools_system.dart 和 command_executor.dart 共享。
+/// 如果输入看起来像包名（含点号），直接返回；否则查内置映射表。
+/// 大小写不敏感（统一 toLowerCase 后匹配）。
 String resolveAppPackage(String input) {
-  // If it looks like a package name (contains dots), return as-is
+  // 含点号 → 视为包名直接返回
   if (input.contains('.')) return input;
+  /// 内置中文名 → 包名映射表。
+  /// 注意：全部 key 为小写，resolveAppPackage 中会先 toLowerCase 再查表。
+  /// 多个 key 可映射到同一包名（如「地图」「百度地图」→ com.baidu.BaiduMap）。
   const map = {
     '微信': 'com.tencent.mm',
     'qq': 'com.tencent.mobileqq',
@@ -363,5 +741,85 @@ String resolveAppPackage(String input) {
   return map[input.toLowerCase()] ?? input;
 }
 
-/// Parse boolean from dynamic value (supports DeepSeek XML string "true"/"false").
+/// 安全解析布尔值，兼容多种类型。
+/// DeepSeek XML 模式下 bool 可能被序列化为字符串 "true"/"false"，
+/// 也可能以整数 1/0 形式传入。此函数统一处理。
 bool _parseBool(dynamic v) => v == true || v == 'true' || v == 1;
+
+// ═══════════════════════════════════════════════
+// OneBot 桥接控制
+// ═══════════════════════════════════════════════
+
+/// 注册 OneBot 桥接工具——AI 可通过这些工具管理 QQ/微信接入
+void registerOneBotTools() {
+  final registry = ToolRegistry();
+
+  // ── start_onebot — 启动 OneBot 服务 ──
+  registry.register(ToolEntry(
+    name: 'start_onebot',
+    toolset: 'system',
+    schema: {
+      'name': 'start_onebot',
+      'description': '启动 OneBot WebSocket 服务，允许 NapCatQQ 等客户端连接。默认端口 13579。启用后 QQ/微信消息会自动由 AI 回复。',
+      'parameters': {
+        'type': 'object',
+        'properties': {
+          'port': {'type': 'integer', 'description': 'WebSocket 端口，默认 13579'}
+        }
+      }
+    },
+    handler: (args) async {
+      final port = (args['port'] as num?)?.toInt() ?? 13579;
+      await dbs.DB.setConfig('onebot_enabled', 'true');
+      await dbs.DB.setConfig('onebot_port', port.toString());
+      final bridge = ob.OneBotBridge();
+      await bridge.stop();
+      final ok = await bridge.start(port: port);
+      return jsonEncode({
+        'success': ok,
+        'port': port,
+        'hint': ok
+            ? 'OneBot 服务已启动在 ws://0.0.0.0:$port/onebot，NapCatQQ 反向 WebSocket 地址填这个'
+            : '启动失败，端口可能被占用'
+      });
+    },
+  ));
+
+  // ── stop_onebot — 停止 OneBot 服务 ──
+  registry.register(ToolEntry(
+    name: 'stop_onebot',
+    toolset: 'system',
+    schema: {
+      'name': 'stop_onebot',
+      'description': '停止 OneBot WebSocket 服务',
+      'parameters': {'type': 'object', 'properties': {}}
+    },
+    handler: (args) async {
+      await dbs.DB.setConfig('onebot_enabled', 'false');
+      await ob.OneBotBridge().stop();
+      return jsonEncode({'stopped': true});
+    },
+  ));
+
+  // ── onebot_status — 查看状态 ──
+  registry.register(ToolEntry(
+    name: 'onebot_status',
+    toolset: 'system',
+    schema: {
+      'name': 'onebot_status',
+      'description': '查看 OneBot 桥接服务状态：是否运行、连接数、端口',
+      'parameters': {'type': 'object', 'properties': {}}
+    },
+    handler: (args) async {
+      final bridge = ob.OneBotBridge();
+      return jsonEncode({
+        'running': bridge.isRunning,
+        'port': bridge.port,
+        'clients': bridge.clientCount,
+        'hint': bridge.isRunning
+            ? 'NapCatQQ 反向 WebSocket 地址：ws://<手机IP>:${bridge.port}/onebot'
+            : '服务未运行，调用 start_onebot 启动'
+      });
+    },
+  ));
+}

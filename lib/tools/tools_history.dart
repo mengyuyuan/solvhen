@@ -1,10 +1,18 @@
-/// History search tool — Solvhen searches past conversations.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 历史搜索工具——AI可搜索对话历史记录
+// ═══════════════════════════════════════════════════════════════
+
 library;
+
 
 import 'dart:convert';
 import 'tool_registry.dart';
 import '../services/database_service.dart';
 
+/// 注册对话历史搜索工具
+/// 工具：search_history(搜索对话记录)/get_recent_history(获取最近消息)
+/// 底层：FTS5全文搜索，失败回退LIKE模糊匹配
 void registerHistoryTool() {
   final registry = ToolRegistry();
 

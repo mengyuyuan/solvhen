@@ -1,3 +1,13 @@
+/// Solvhen AI手机智能体 — 聊天状态管理（Riverpod StateNotifier）
+/// 核心状态机：管理消息历史、LLM 请求、工具调用循环、TTS 语音输出。
+///
+/// 架构要点：
+/// - ChatState 是不可变数据类，通过 copyWith 更新
+/// - send() 是主流程：user msg → API chatWithTools → 工具循环 → chatStream 最终回复 → TTS
+/// - 使用可取消 Timer 避免 TTS 竞态条件
+/// - 支持主动推送通知给用户
+library;
+
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -13,8 +23,10 @@ import '../services/voice_service.dart';
 import '../tools/tool_registry.dart';
 import 'agent_avatar.dart';
 
+/// 全局聊天状态 Provider
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) => ChatNotifier(ref));
 
+/// 聊天状态：不可变数据类，包含消息列表、加载状态、流式文本、token 用量等
 class ChatState {
   final List<Message> messages;
   final bool loading;
@@ -22,15 +34,15 @@ class ChatState {
   final String? error;
   final bool ready;
   final int conversationId;
-  final int tokenCount;
-  final int contextLimit;
-  final double contextRatio;
-  final int apiPromptTokens;
-  final int apiCompletionTokens;
-  final AgentState agentState;
-  final String agentToolStatus;
-  final DateTime? sendStartedAt;
-  final bool ttsSpeaking;         // TTS is currently playing
+  final int tokenCount;          // 本地估算的 token 数
+  final int contextLimit;        // 模型上下文窗口大小
+  final double contextRatio;     // API 返回的实际上下文比例（优先于 local 估算）
+  final int apiPromptTokens;     // API 返回的 prompt token 数
+  final int apiCompletionTokens; // API 返回的 completion token 数
+  final AgentState agentState;   // Agent 头像状态（思考/编码/搜索等）
+  final String agentToolStatus;  // 当前工具状态文本（如 "执行中…"）
+  final DateTime? sendStartedAt; // 发送开始时间（用于思考动画计时）
+  final bool ttsSpeaking;        // TTS 是否正在播放
 
   const ChatState({
     this.messages = const [],
@@ -50,6 +62,8 @@ class ChatState {
     this.ttsSpeaking = false,
   });
 
+  /// 不可变拷贝：使用 ?? 运算符保持未传字段不变。
+  /// clearErr/clearSendTime 标志允许显式清空字段（因为 null 表示"保持不变"）。
   ChatState copyWith({
     List<Message>? messages,
     bool? loading,
@@ -87,14 +101,19 @@ class ChatState {
   );
 }
 
+/// 聊天状态管理（Riverpod StateNotifier）
+/// 核心流程：用户输入 → API调用 → 流式更新 → 工具循环 → 记忆整合
+/// ⚠️ 工具循环最多1轮（_maxToolIterations=1），防止无限循环卡死UI
 class ChatNotifier extends StateNotifier<ChatState> {
   final ApiService _api = ApiService();
   bool _historyReady = false;
   bool _interrupted = false;
-  String _ttsBuf = '';  // buffer for sentence detection
+  String _ttsBuf = '';   // TTS 句子缓冲区：累积流式文本直到遇到句子结束符
+  Timer? _ttsTimer;      // ⚠️ 可取消的 TTS 完成定时器，避免 Future.delayed 闭包捕获旧状态
 
   ChatNotifier(Ref ref) : super(const ChatState()) { _init(); }
 
+  /// 初始化：加载技能、消息历史、配置、估算 token
   Future<void> _init() async {
     List<Message> msgs = const [];
     try {
@@ -117,11 +136,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
         contextRatio: limit > 0 ? tokens / limit : 0,
       );
     } catch (e) {
+      // ⚠️ 即使初始化失败也设为 ready，否则 UI 永远不显示
       _historyReady = true;
       state = state.copyWith(messages: msgs, ready: true, error: '初始化失败: $e');
     }
   }
 
+  /// 从数据库刷新消息列表和 token 计数
   Future<void> refreshFromDB() async {
     final rows = await DB.getMessages(state.conversationId, limit: 50);
     final msgs = rows.map((r) => Message.fromMap(r)).toList();
@@ -132,10 +153,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
       contextRatio: state.contextLimit > 0 ? tokens / state.contextLimit : 0);
   }
 
+  /// 重置消息列表（用于重新生成）
   void resetToMessages(List<Message> msgs) {
     state = state.copyWith(messages: msgs);
   }
 
+  /// 切换对话：加载新对话的消息历史，触发旧对话的摘要合并
   Future<void> switchConversation(int convId) async {
     if (state.loading) return;
     final oldConvId = state.conversationId;
@@ -153,41 +176,53 @@ class ChatNotifier extends StateNotifier<ChatState> {
         tokenCount: tokens, contextLimit: limit,
         contextRatio: limit > 0 ? tokens / limit : 0);
 
+      // 对旧对话执行摘要合并以节省 token
       if (oldConvId != convId && oldConvId > 0) {
         await PromptBuilder.consolidateConversation(oldConvId);
       }
       PromptBuilder.invalidateStableCache();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Solvhen] switchConversation failed: $e');
+    }
   }
 
+  /// 设置 Agent 状态（头像动画 + 工具状态文本）
   void _setState(AgentState s, [String? status]) {
     state = state.copyWith(agentState: s, agentToolStatus: status ?? '');
   }
 
+  /// 取消当前请求：设置中断标志 + 停止 TTS + 重置状态
   void cancel() {
     _interrupted = true;
+    VoiceService().stop();
     _setState(AgentState.idle);
+    state = state.copyWith(ttsSpeaking: false);
   }
 
+  /// 关闭错误横幅
   void dismissError() {
     state = state.copyWith(clearErr: true);
   }
 
-  /// Interrupt TTS playback.
+  /// 中断 TTS 播放：停止语音 + 重置 ttsSpeaking 标志
   void stopSpeaking() {
     VoiceService().stop();
     state = state.copyWith(ttsSpeaking: false);
   }
 
+  /// 主动推送通知到用户设备
   Future<void> push({required String title, required String body, String? payload}) async {
     await NotificationService().show(title: title, body: body, payload: payload);
   }
 
   // ═══════════════════════════════════════════════════
-  // SEND
+  // 发送消息主流程
   // ═══════════════════════════════════════════════════
 
-  Future<void> send(String text) async {
+  /// 主发送流程：
+  /// 1. 保存用户消息 → 2. API chatWithTools（含工具循环最多8轮）
+  /// → 3. chatStream 最终回复 → 4. TTS 语音输出 → 5. 保存 AI 消息
+  Future<void> send(String text, {bool isVoice = false}) async {
     if (state.loading || !_historyReady) return;
     _interrupted = false;
 
@@ -198,6 +233,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final db = await DB.database;
     await db.insert('messages', userMsg.toMap());
     await DB.touchConversation(convId);
+    await DB.setActiveConversation(convId); // 持久化当前对话，防止杀进程后丢失
 
     final historyBefore = List<Message>.from(state.messages);
     _setState(AgentState.thinking);
@@ -214,26 +250,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final registry = ToolRegistry();
       final toolDefs = registry.getToolDefs();
 
+      // ── 第一步：chatWithTools（非流式，含工具调用循环）──
       var result = await _api.chatWithTools(
         systemPrompt: await PromptBuilder.build(historyBefore, text,
             toolNames: registry.names, conversationId: convId),
         history: historyBefore, userMessage: text, tools: toolDefs,
-      ).timeout(const Duration(seconds: 90));
+      ).timeout(const Duration(seconds: 120));      // 首次调用宽限到120s
 
       int totalPromptTokens = result.usage?.promptTokens ?? 0;
       int totalCompletionTokens = result.usage?.completionTokens ?? 0;
-      bool hadToolCalls = false;
 
+      // ── 工具调用循环：最多 50 轮（发微信这类多步操作需要15-20轮）──
       int iterations = 0;
-      const maxIterations = 8;
+      const maxIterations = 50;
       while (result.toolCalls != null &&
              result.toolCalls!.isNotEmpty &&
              iterations < maxIterations) {
-        hadToolCalls = true;
         if (_interrupted) break;
         iterations++;
         final calls = result.toolCalls!;
 
+        // 保存 assistant 消息（含工具调用 JSON）
         final cleanContent = ToolExecutor.stripToolCallsFromContent(result.content);
         final toolCallsJson = result.rawToolCalls != null
             ? jsonEncode(result.rawToolCalls) : null;
@@ -246,10 +283,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
         state = state.copyWith(messages: [...state.messages, assistantMsg]);
         nextHistory.add(assistantMsg);
 
+        // 执行工具调用
         _setState(ToolExecutor.stateForTool(calls.first.name), '执行中…');
         final executor = ToolExecutor(onStateChange: (s) => _setState(s));
         final toolResults = await executor.execute(calls);
 
+        // 保存工具结果消息
         final newMsgs = List<Message>.of(state.messages, growable: true);
         for (int i = 0; i < calls.length && i < toolResults.length; i++) {
           final r = toolResults[i];
@@ -265,6 +304,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
         state = state.copyWith(messages: newMsgs);
 
+        // 更新 token 计数
         final midPrompt = await PromptBuilder.build(
             nextHistory, '', toolNames: registry.names, conversationId: convId);
         state = state.copyWith(
@@ -278,11 +318,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _setState(AgentState.thinking);
         final bool hasMoreIterations = iterations < maxIterations;
         if (!hasMoreIterations) break;
+        // 下一轮 chatWithTools — 每次刷新工具列表，让 register_tool 新增的工具立即可用
         result = await _api.chatWithTools(
           systemPrompt: await PromptBuilder.build(nextHistory, '',
               toolNames: registry.names, conversationId: convId),
-          history: nextHistory, userMessage: '', tools: toolDefs,
-        ).timeout(const Duration(seconds: 45));
+          history: nextHistory, userMessage: '', tools: registry.getToolDefs(),
+        ).timeout(const Duration(seconds: 60));   // 每轮60s，给无障碍操作留时间
 
         if (result.usage != null) {
           totalPromptTokens += result.usage!.promptTokens;
@@ -290,20 +331,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       }
 
-      // Final reply via streaming for real-time display
+      // ── 中断检查 ──
       if (_interrupted) {
         _setState(AgentState.idle);
         state = state.copyWith(loading: false, streaming: '', clearSendTime: true);
         return;
       }
 
+      // ── 第二步：chatStream 获取最终回复（流式，实时显示）──
       _setState(AgentState.speaking);
       _ttsBuf = '';
       final voice = VoiceService();
-      await voice.init();
-      state = state.copyWith(ttsSpeaking: true);
+      // 仅语音输入时启用 TTS
+      if (isVoice && voice.volcanoReady) {
+        await voice.init();
+        state = state.copyWith(ttsSpeaking: true);
+      }
 
-      String finalText;
+      String finalText = '';
       try {
         final prompt = await PromptBuilder.build(nextHistory, '',
             toolNames: ToolRegistry().names, conversationId: convId);
@@ -314,45 +359,67 @@ class ChatNotifier extends StateNotifier<ChatState> {
             sb.write(chunk);
             state = state.copyWith(streaming: sb.toString());
             _ttsBuf += chunk;
-            _flushTtsSentences(voice);
+            if (isVoice) _flushTtsSentences(voice);
           },
-        ).timeout(const Duration(seconds: 60));
+        ).timeout(const Duration(seconds: 90));    // 流式最终回复宽限到90s
         finalText = streamResult.content;
       } catch (_) {
-        // Fallback to non-streaming result
-        finalText = result.content;
+        // 流式失败 → 回退到非流式结果
+        // ⚠️ 回退内容可能包含工具调用 XML，后续会被 stripToolCallsFromContent 清理
+        finalText = result.content.isNotEmpty ? result.content : '（网络超时，请稍后重试）';
       }
 
+      // 清理工具调用标签和空白
       finalText = ToolExecutor.stripToolCallsFromContent(finalText);
       finalText = finalText.trim();
-      if (finalText.isEmpty) finalText = '好了。';
+      if (finalText.isEmpty) {
+        // 空回复不回显，避免无意义的"好了。"刷屏
+        _setState(AgentState.idle);
+        state = state.copyWith(loading: false, streaming: '', clearSendTime: true);
+        return;
+      }
 
-      // Flush remaining TTS
+      // 刷新 TTS 缓冲区中剩余的文本（仅语音输入）
       final remaining = _ttsBuf.trim();
-      if (remaining.isNotEmpty && remaining.length > 1) {
+      if (isVoice && remaining.isNotEmpty && remaining.length > 1) {
         unawaited(voice.speakChunk(remaining));
       }
 
-      final aiMsg = Message(
-        content: finalText, role: 'assistant',
-        timestamp: DateTime.now(), conversationId: convId,
-      );
-      await db.insert('messages', aiMsg.toMap());
+      // 保存 AI 回复到数据库 —— 真人化：每句话拆成独立气泡
+      final sentences = _splitSentences(finalText);
+      final baseTime = DateTime.now();
+      final aiMsgs = <Message>[];
+      final batch = db.batch();
+      for (int i = 0; i < sentences.length; i++) {
+        final sentence = sentences[i].trim();
+        if (sentence.isEmpty) continue;
+        final msg = Message(
+          content: sentence, role: 'assistant',
+          timestamp: baseTime.add(Duration(milliseconds: i * 200)),
+          conversationId: convId,
+        );
+        batch.insert('messages', msg.toMap());
+        aiMsgs.add(msg);
+      }
+      await batch.commit(noResult: true);
       await DB.touchConversation(convId);
 
-      // TTS will finish in background
-      unawaited(Future.delayed(const Duration(seconds: 2)).then((_) {
+      // ⚠️ 使用可取消 Timer 避免竞态条件：新请求会 cancel 旧 Timer
+      state = state.copyWith(ttsSpeaking: true);
+      _ttsTimer?.cancel();
+      _ttsTimer = Timer(const Duration(seconds: 2), () {
         state = state.copyWith(ttsSpeaking: false);
-      }));
+      });
 
-      final allMsgs = [...state.messages, aiMsg];
+      // 更新最终 token 计数
+      final allMsgs = [...state.messages, ...aiMsgs];
       final newPrompt = await PromptBuilder.build(allMsgs, '',
           toolNames: ToolRegistry().names, conversationId: convId);
       final estimated = PromptBuilder.estimateTokens(newPrompt, allMsgs);
 
       _setState(AgentState.idle);
       state = state.copyWith(
-        messages: [...state.messages, aiMsg],
+        messages: [...state.messages, ...aiMsgs],
         loading: false, streaming: '',
         tokenCount: estimated,
         apiPromptTokens: totalPromptTokens,
@@ -361,6 +428,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
             ? (totalPromptTokens + totalCompletionTokens) / state.contextLimit : 0,
         clearSendTime: true,
       );
+
+      // 自动命名：新对话首轮后 LLM 生成标题
+      _autoNameConversation(convId, text, finalText);
     } on ApiBalanceException catch (e) {
       _setState(AgentState.idle);
       state = state.copyWith(loading: false, streaming: '', error: e.message, clearSendTime: true);
@@ -371,7 +441,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       _setState(AgentState.idle);
       state = state.copyWith(loading: false, streaming: '', error: e.message, clearSendTime: true);
     } catch (e) {
-      // Fallback: non-streaming
+      // ── 兜底：主流程失败时尝试非流式请求 ──
       try {
         final prompt = await PromptBuilder.build(nextHistory, text,
             toolNames: ToolRegistry().names, conversationId: convId);
@@ -425,8 +495,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
   }
 
-  /// Flush complete sentences from TTS buffer to voice service.
+  /// 从 TTS 缓冲区中刷新完整句子到语音服务。
+  /// 句子边界：。！？\n …（实际换行符和中文标点）
   void _flushTtsSentences(VoiceService voice) {
+    // ⚠️ 修复：'\n' 匹配实际换行符；之前 '\\n' 只匹配字面量反斜杠+n 两个字符
     const endings = ['。', '！', '？', '\n', '…'];
     while (true) {
       int? cut;
@@ -445,10 +517,48 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
   }
 
+  /// 保存消息到数据库（失败时记录日志，不阻断主流程）
   Future<void> _saveMsg(Message msg) async {
     try {
       final db = await DB.database;
       await db.insert('messages', msg.toMap());
+    } catch (e) {
+      debugPrint('[Solvhen] _saveMsg failed: $e');
+    }
+  }
+
+  /// 按句子边界拆分文本 —— 真人化：每句话单独一个气泡
+  /// 拆分规则：。！？… \\n 之后切分，保留标点符号在句子末尾。
+  /// 只有一句话时不拆。空句跳过。
+  static List<String> _splitSentences(String text) {
+    final result = <String>[];
+    final buf = StringBuffer();
+    for (int i = 0; i < text.length; i++) {
+      final ch = text[i];
+      buf.write(ch);
+      if (ch == '。' || ch == '！' || ch == '？' || ch == '…' || ch == '\n') {
+        final s = buf.toString().trim();
+        if (s.isNotEmpty && s != '。' && s != '！' && s != '？' && s != '…') {
+          result.add(s);
+        }
+        buf.clear();
+      }
+    }
+    final last = buf.toString().trim();
+    if (last.isNotEmpty) result.add(last);
+    return result;
+  }
+
+  /// 自动给新对话命名——首轮后取用户消息前20字做标题
+  Future<void> _autoNameConversation(int convId, String userMsg, String aiReply) async {
+    try {
+      final db = await DB.database;
+      final rows = await db.query('conversations', where: 'id = ?', whereArgs: [convId], limit: 1);
+      if (rows.isEmpty) return;
+      final title = rows.first['title'] as String? ?? '';
+      if (title != '新对话') return; // 不覆盖已命名的
+      final short = userMsg.length > 20 ? '${userMsg.substring(0, 20)}…' : userMsg;
+      await DB.updateConversationTitle(convId, short);
     } catch (_) {}
   }
 }

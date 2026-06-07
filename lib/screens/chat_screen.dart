@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -12,7 +11,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../theme/theme_provider.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
-import '../services/voice_service.dart';
 import '../models/conversation.dart';
 import '../commands/command_registry.dart';
 import '../commands/command_executor.dart';
@@ -23,6 +21,7 @@ import 'thinking_overlay.dart';
 import 'ui_controller.dart';
 import 'webview_canvas.dart';
 import '../models/message.dart';
+import '../services/tool_executor.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -46,12 +45,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   PushEvent? _pushEvent;
   StreamSubscription<PushEvent>? _pushSub;
 
-  // Compiled-once regexes for _cleanDisplay
-  static final _reToolCalls = RegExp(r'<tool_calls\\b[^>]*>.*?</tool_calls>', dotAll: true);
-  static final _reInvoke = RegExp(r'<invoke\\s[^>]*>.*?</invoke>', dotAll: true);
-  static final _reParameter = RegExp(r'<parameter\\s[^>]*>.*?</parameter>', dotAll: true);
-  static final _reXmlTags = RegExp(r'</?(?:tool_calls|invoke|parameter)\\b[^>]*>', dotAll: true);
-
   // Voice mode
   bool _voiceMode = false;
   final stt.SpeechToText _stt = stt.SpeechToText();
@@ -68,6 +61,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (mounted) setState(() => _pushEvent = event);
     });
     _stt.initialize().then((ok) { if (mounted) setState(() => _sttReady = ok); });
+
+    // Auto-scroll when message count increases (AI response arrives).
+    // ConsumerState.ref may not be ready in initState — defer to first frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.listen(chatProvider.select((s) => s.messages.length), (prev, next) {
+        if (next > (prev ?? 0)) {
+          if (mounted) _scrollDown();
+        }
+      });
+      // Scroll to bottom when conversation changes
+      ref.listen(chatProvider.select((s) => s.conversationId), (prev, next) {
+        if (prev != next) {
+          _expandedTools.clear();
+          _typewriterIdx.clear();
+          Future.delayed(const Duration(milliseconds: 200), () {
+            if (mounted) _scrollDown();
+          });
+        }
+      });
+    });
   }
 
   @override
@@ -96,7 +110,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     });
   }
 
-  Future<void> _send() async {
+  Future<void> _send({bool isVoice = false}) async {
     final s = ref.read(chatProvider);
     if (s.loading) return;
     final t = _ctrl.text.trim();
@@ -127,7 +141,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     _ctrl.clear();
     setState(() { _hasText = false; _showSuggestions = false; });
-    ref.read(chatProvider.notifier).send(t);
+    ref.read(chatProvider.notifier).send(t, isVoice: isVoice);
     Future.delayed(const Duration(milliseconds: 100), _scrollDown);
   }
 
@@ -286,21 +300,25 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Watch only fields that should trigger a full rebuild.
-    // Messages/loading/conversationId trigger rebuild; streaming/token/toolStatus do NOT.
-    final messages = ref.watch(chatProvider.select((s) => s.messages));
-    final loading = ref.watch(chatProvider.select((s) => s.loading));
+    // Watch for rebuild triggers. Variables intentionally unused — the watch
+    // itself registers rebuild dependencies; the read snapshot is in `s` below.
+    ref.watch(chatProvider.select((s) => s.messages));
+    ref.watch(chatProvider.select((s) => s.loading));
     final conversationId = ref.watch(chatProvider.select((s) => s.conversationId));
-    final error = ref.watch(chatProvider.select((s) => s.error));
+    ref.watch(chatProvider.select((s) => s.error));
     // Snapshot for everything else — no rebuild on these field changes
     final s = ref.read(chatProvider);
     final theme = ref.watch(themeProvider);
     final c = ThemeColors(theme);
 
-    // Clear typewriter indices when conversation changes
+    // Clear typewriter indices + scroll to bottom when conversation changes
     if (conversationId != _lastConvId) {
       _typewriterIdx.clear();
       _lastConvId = conversationId;
+      // Scroll down after rebuild — new conversation may have messages
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollDown();
+      });
     }
 
     return Scaffold(
@@ -403,10 +421,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ? s.contextRatio.clamp(0.0, 1.0)
         : (s.contextLimit > 0 ? (displayTokens / s.contextLimit).clamp(0.0, 1.0) : 0.0);
     final color = pct > 95
-        ? const Color(0xFFFF3B30)
+        ? c.danger
         : pct > 80
-            ? const Color(0xFFFF9500)
-            : hasApiData ? const Color(0xFF34C759) : c.accent;
+            ? c.warning
+            : hasApiData ? c.success : c.accent;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
@@ -421,7 +439,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ? 'API ${_fmtK(apiTotal)}'
               : '${_fmtK(s.tokenCount)} / ${_fmtK(s.contextLimit)}',
           style: TextStyle(fontSize: 11,
-            color: hasApiData ? const Color(0xFF34C759) : c.textTertiary,
+            color: hasApiData ? c.success : c.textTertiary,
             fontFamily: 'monospace',
             fontWeight: hasApiData ? FontWeight.w600 : FontWeight.w400,
           ),
@@ -462,12 +480,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return n.toString();
   }
 
-  String _fmtSize(int bytes) {
-    if (bytes >= 1048576) return '${(bytes / 1048576).toStringAsFixed(1)}MB';
-    if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(0)}KB';
-    return '$bytes B';
-  }
-
   // ═══════════════════════════════════════
   // ERROR BANNER
   // ═══════════════════════════════════════
@@ -477,16 +489,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final isBalance = msg.contains('余额已用尽');
     final isRateLimit = msg.contains('太频繁');
     final bgColor = isBalance
-        ? const Color(0xFFFF3B30).withValues(alpha: 0.12)
+        ? c.danger.withValues(alpha: 0.12)
         : isRateLimit
-            ? const Color(0xFFFF9500).withValues(alpha: 0.12)
-            : const Color(0xFFFF9500).withValues(alpha: 0.08);
+            ? c.warning.withValues(alpha: 0.12)
+            : c.warning.withValues(alpha: 0.08);
     final borderColor = isBalance
-        ? const Color(0xFFFF3B30).withValues(alpha: 0.4)
-        : const Color(0xFFFF9500).withValues(alpha: 0.3);
+        ? c.danger.withValues(alpha: 0.4)
+        : c.warning.withValues(alpha: 0.3);
     final icon = isBalance ? Icons.account_balance_wallet_outlined
         : isRateLimit ? Icons.speed : Icons.warning_amber_outlined;
-    final iconColor = isBalance ? const Color(0xFFFF3B30) : const Color(0xFFFF9500);
+    final iconColor = isBalance ? c.danger : c.warning;
 
     return GestureDetector(
       onTap: () => ref.read(chatProvider.notifier).dismissError(),
@@ -745,6 +757,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
       );
     }
+    
+    // Find last assistant message with content (for avatar visibility)
+    int lastAsstIdx = -1;
+    for (int j = s.messages.length - 1; j >= 0; j--) {
+      if (s.messages[j].role == 'assistant' && s.messages[j].content.isNotEmpty) {
+        lastAsstIdx = j;
+        break;
+      }
+    }
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -791,7 +812,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     const Spacer(),
                     Expanded(
                       child: Text(
-                        m.content.length > 300 ? '${m.content.substring(0, 300)}…' : m.content,
+                        _cleanDisplay(m.content.length > 300 ? '${m.content.substring(0, 300)}…' : m.content),
                         style: TextStyle(fontSize: 11, color: c.textSecondary, fontFamily: 'monospace'),
                         maxLines: 8, overflow: TextOverflow.ellipsis,
                       ),
@@ -828,7 +849,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             onTap: isSpeaking
                 ? () => ref.read(chatProvider.notifier).stopSpeaking()
                 : null,
-            child: _bubble(text, false, c, showSpeaking: isSpeaking),
+            child: _bubble(text, false, c, showSpeaking: isSpeaking, showAvatar: false, avatarBelow: i == lastAsstIdx),
           );
         },
       ),
@@ -879,7 +900,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _sendVoiceText(String text) {
     _ctrl.text = text;
-    _send();
+    _send(isVoice: true);
   }
 
   void _toggleVoiceMode() {
@@ -942,20 +963,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: _recording
-                          ? const Color(0xFFFF3B30).withValues(alpha: 0.3)
+                          ? c.danger.withValues(alpha: 0.3)
                           : c.accent.withValues(alpha: 0.2),
                       border: Border.all(
-                        color: _recording ? const Color(0xFFFF3B30) : c.accent,
+                        color: _recording ? c.danger : c.accent,
                         width: 3,
                       ),
                       boxShadow: _recording ? [
-                        BoxShadow(color: const Color(0xFFFF3B30).withValues(alpha: 0.3), blurRadius: 24, spreadRadius: 2),
+                        BoxShadow(color: c.danger.withValues(alpha: 0.3), blurRadius: 24, spreadRadius: 2),
                       ] : null,
                     ),
                     child: Icon(
                       _recording ? Icons.stop_rounded : Icons.mic,
                       size: 36,
-                      color: _recording ? const Color(0xFFFF3B30) : c.accent,
+                      color: _recording ? c.danger : c.accent,
                     ),
                   ),
                 );
@@ -1064,35 +1085,54 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return _cleanDisplay(m.content);
   }
 
-  Widget _bubble(String text, bool isUser, ThemeColors c, {bool showSpeaking = false}) {
+  Widget _bubble(String text, bool isUser, ThemeColors c, {bool showSpeaking = false, bool showAvatar = true, bool avatarBelow = false}) {
     final clean = _cleanDisplay(text);
+    final bubble = Container(
+      constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isUser ? (UIController().userBubbleColor ?? c.bubbleUser) : (UIController().bubbleColor ?? c.bubbleAssistant),
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(18),
+          topRight: const Radius.circular(18),
+          bottomLeft: isUser ? const Radius.circular(18) : const Radius.circular(4),
+          bottomRight: isUser ? const Radius.circular(4) : const Radius.circular(18),
+        ),
+      ),
+      child: Text(clean, style: TextStyle(fontSize: 15, color: c.textPrimary, height: 1.5)),
+    );
+
+    // Avatar below bubble (Claude-style, last message only)
+    if (avatarBelow && !isUser) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            bubble,
+            if (showSpeaking) _buildSpeakingIndicator(c),
+            const SizedBox(height: 6),
+            AgentAvatar(size: 20, state: AgentState.idle),
+          ],
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Row(
         mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (!isUser)
+          if (!isUser && showAvatar)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: AgentAvatar(size: 24, state: AgentState.idle),
             ),
           Flexible(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: isUser ? (UIController().userBubbleColor ?? c.bubbleUser) : (UIController().bubbleColor ?? c.bubbleAssistant),
-                  borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(18),
-                    topRight: const Radius.circular(18),
-                    bottomLeft: isUser ? const Radius.circular(18) : const Radius.circular(4),
-                    bottomRight: isUser ? const Radius.circular(4) : const Radius.circular(18),
-                  ),
-                ),
-                child: Text(clean, style: TextStyle(fontSize: 15, color: c.textPrimary, height: 1.5)),
-              ),
+              bubble,
               if (showSpeaking) _buildSpeakingIndicator(c),
             ]),
           ),
@@ -1117,15 +1157,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   /// Strip any residual XML tool-call markup from display text.
-  /// Uses compiled-once static regexes — no recompilation per call.
+  /// Delegates to ToolExecutor for unified stripping logic (same as API layer).
   String _cleanDisplay(String text) {
     if (!text.contains('<')) return text;
-    var c = text;
-    c = c.replaceAll(_reToolCalls, '');
-    c = c.replaceAll(_reInvoke, '');
-    c = c.replaceAll(_reParameter, '');
-    c = c.replaceAll(_reXmlTags, '');
-    return c.trim();
+    return ToolExecutor.stripToolCallsFromContent(text);
   }
 }
 

@@ -55,13 +55,22 @@ class ToolExecutor {
 
   // Compiled-once regexes — avoids recompilation on every call.
   static final _invokeRe = RegExp(r'<invoke\s+name="(\w+)"\s*>(.*?)</invoke>', dotAll: true);
+  static final _dsmlInvokeRe = RegExp(r'<\s*\|*\s*DSML\s*\|*\s*invoke\s+name="(\w+)"[^>]*>(.*?)</\s*\|*\s*DSML\s*\|*\s*invoke\s*>', dotAll: true);
   static final _paramBlockRe = RegExp(r'<parameter[^>]*>(.*?)</parameter>', dotAll: true);
+  static final _dsmlParamRe = RegExp(r'<\s*\|*\s*DSML\s*\|*\s*parameter[^>]*>(.*?)</\s*\|*\s*DSML\s*\|*\s*parameter\s*>', dotAll: true);
   static final _nameRe = RegExp(r'name="(\w+)"');
 
   /// DeepSeek sometimes returns tool calls as XML inside content text
   /// instead of in the tool_calls array. Parse them out.
+  /// Supports both standard (<invoke>) and DSML (<|DSML|invoke>) formats.
   static List<ToolCall>? parseToolCallsFromContent(String content) {
-    final matches = _invokeRe.allMatches(content);
+    // Try standard XML first, then DSML
+    var matches = _invokeRe.allMatches(content);
+    var paramBlockRe = _paramBlockRe;
+    if (matches.isEmpty) {
+      matches = _dsmlInvokeRe.allMatches(content);
+      paramBlockRe = _dsmlParamRe;
+    }
     if (kDebugMode) debugPrint('[PARSE-XML] content_len=${content.length} match_count=${matches.length} first20=${content.length > 20 ? content.substring(0, 20) : content}');
     if (matches.isEmpty) return null;
 
@@ -105,6 +114,9 @@ class ToolExecutor {
   static final _sHtmlRe = RegExp(r'```html?\s*\n[\s\S]*?```', dotAll: true);
   static final _sCssRe = RegExp(r'```css\s*\n[\s\S]*?```', dotAll: true);
   static final _sBlankRe = RegExp(r'\n{3,}');
+  // DSML format: <|DSML|invoke name="...">...</|DSML|invoke>  (supports 0-2 pipes)
+  static final _sDsmlBlock = RegExp(r'<\s*\|*\s*DSML\s*\|*\s*\w+\b[^>]*>.*?</\s*\|*\s*DSML\s*\|*\s*\w+\s*>', dotAll: true);
+  static final _sDsmlTag = RegExp(r'</?\s*\|*\s*DSML\s*\|*\s*\w+[^>]*>', dotAll: true);
 
   /// Strip XML tool call blocks from content for clean display.
   static String stripToolCallsFromContent(String content) {
@@ -117,6 +129,8 @@ class ToolExecutor {
     c = c.replaceAll(_sHtmlRe, '');
     c = c.replaceAll(_sCssRe, '');
     c = c.replaceAll(_sBlankRe, '\n\n');
+    c = c.replaceAll(_sDsmlBlock, '');
+    c = c.replaceAll(_sDsmlTag, '');
     return c.trim();
   }
 

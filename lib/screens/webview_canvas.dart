@@ -1,13 +1,18 @@
-/// WebView Canvas — Solvhen's HTML playground.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// WebView画布——Android PlatformView渲染HTML画布，AI可动态绘制视觉效果
+// ═══════════════════════════════════════════════════════════════
+
+library;
+
 ///
 /// Replaces the complex Flutter visual layer with a single WebView.
 /// Solvhen controls it via the `render_html` tool.
 /// HTML content persists across app restarts (saved to DB config).
-library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/database_service.dart';
@@ -16,16 +21,21 @@ import '../services/database_service.dart';
 // Controller — singleton, tool talks to this
 // ═══════════════════════════════════════════════
 
+/// WebView画布控制器（单例）——管理多个WebView实例
+/// ⚠️ Android PlatformView必须在Expanded/SizedBox中才能渲染
+/// ⚠️ 不能放在Stack顶层（会崩溃）
 class WebViewCanvasController {
   static final WebViewCanvasController _instance = WebViewCanvasController._();
   factory WebViewCanvasController() => _instance;
   WebViewCanvasController._();
 
-  WebViewController? _webCtrl;
+  final _controllers = <WebViewController>[];
   final _updateQueue = <_HtmlUpdate>[];
-  bool _ready = false;
-  String? _lastError;
   String? _lastHtml; // cached for persistence
+
+  /// 画布是否有实际内容（非空白页）。Widget 根据此值决定是否渲染 WebView，
+  /// 避免空白 PlatformView 持续占用 GPU 合成资源导致动画卡顿。
+  final ValueNotifier<bool> hasContent = ValueNotifier(false);
 
   /// The default blank page — transparent canvas.
   static const blankPage = '<!DOCTYPE html><html><head>'
@@ -43,7 +53,7 @@ class WebViewCanvasController {
     if (_lastHtml != null) return _lastHtml;
     try {
       final config = await DB.getConfig();
-      final saved = config['canvas_html'] as String?;
+      final saved = config['canvas_html'];
       if (saved != null && saved.isNotEmpty) {
         _lastHtml = saved;
         return saved;
@@ -67,64 +77,70 @@ class WebViewCanvasController {
   }
 
   void _onReady(WebViewController ctrl) {
-    _webCtrl = ctrl;
-    _ready = true;
+    _controllers.add(ctrl);
     _flushQueue();
   }
 
-  void _onDispose() {
-    _webCtrl = null;
-    _ready = false;
-    _updateQueue.clear();
-    _lastError = null;
-    _lastHtml = null;
+  void _onDispose(WebViewController ctrl) {
+    _controllers.remove(ctrl);
+    if (_controllers.isEmpty) {
+      _updateQueue.clear();
+    }
   }
 
   Future<void> _flushQueue() async {
-    if (_updateQueue.isEmpty) return;
+    if (_updateQueue.isEmpty || _controllers.isEmpty) return;
     final batch = List<_HtmlUpdate>.from(_updateQueue);
     _updateQueue.clear();
-
-    for (final u in batch) {
-      try {
-        await _apply(u);
-      } catch (e) {
-        _lastError = e.toString();
+    for (final ctrl in _controllers) {
+      for (final u in batch) {
+        try { await _apply(ctrl, u); } catch (e) { /* log error */ }
       }
     }
   }
 
   Future<void> renderHtml(String html, {String mode = 'replace'}) async {
-    // Persist immediately so restarts don't lose the canvas
-    if (mode == 'replace') {
-      _saveHtml(html);
-    }
+    if (mode == 'replace') _saveHtml(html);
+
+    // 通知所有 WebViewCanvas widget：画布有内容，需要渲染
+    hasContent.value = true;
 
     final update = _HtmlUpdate(html: html, mode: mode);
-    if (_ready && _webCtrl != null) {
-      try {
-        await _apply(update);
-      } catch (e) {
-        _lastError = e.toString();
-      }
-    } else {
-      _updateQueue.add(update);
+    // Broadcast to all active WebViews
+    final controllers = List<WebViewController>.from(_controllers);
+    for (final ctrl in controllers) {
+      try { await _apply(ctrl, update); } catch (e) { /* log error */ }
     }
+    // Also queue for future WebViews
+    if (controllers.isEmpty) _updateQueue.add(update);
   }
 
   /// Run JavaScript in the WebView and return the result.
   Future<String> evalJs(String code) async {
-    if (_webCtrl == null) return jsonEncode({'error': '画布未就绪'});
+    final ctrl = _controllers.isEmpty ? null : _controllers.first;
+    if (ctrl == null) return jsonEncode({'error': '画布未就绪'});
     try {
-      final result = await _webCtrl!.runJavaScriptReturningResult(code);
+      final result = await ctrl.runJavaScriptReturningResult(code);
       return jsonEncode({'result': result.toString()});
     } catch (e) {
       return jsonEncode({'error': e.toString()});
     }
   }
 
-  Future<void> _apply(_HtmlUpdate update) async {
-    final ctrl = _webCtrl!;
+  /// Clear all canvas content — reset to blank transparent page.
+  Future<void> clearCanvas() async {
+    _lastHtml = null;
+    try { await DB.setConfig('canvas_html', ''); } catch (_) {}
+    final controllers = List<WebViewController>.from(_controllers);
+    for (final ctrl in controllers) {
+      try {
+        await ctrl.runJavaScript("document.getElementById('c').innerHTML='';");
+        await ctrl.loadHtmlString(blankPage);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _apply(WebViewController ctrl, _HtmlUpdate update) async {
     final bytes = utf8.encode(update.html);
     final b64 = base64Encode(bytes);
     if (update.mode == 'replace') {
@@ -199,6 +215,8 @@ class WebViewCanvas extends StatefulWidget {
 class _WebViewCanvasState extends State<WebViewCanvas> {
   late final WebViewController _ctrl;
   bool _loaded = false;
+  bool _shouldRender = false;
+  Uint8List? _screenshot; // WebView 渲染完截图，之后显示静态图零 GPU 开销
 
   @override
   void initState() {
@@ -208,14 +226,63 @@ class _WebViewCanvasState extends State<WebViewCanvas> {
       ..setBackgroundColor(const Color(0x00000000))
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageFinished: (_) {
+          onPageFinished: (_) async {
             WebViewCanvasController()._onReady(_ctrl);
+            // 渲染完成 → 截图 → 切静态显示，销毁 WebView 的 PlatformView 开销
+            await _captureAndFreeze();
           },
         ),
       );
 
-    // Load persisted HTML on startup
+    WebViewCanvasController().hasContent.addListener(_onHasContent);
     _loadStartup();
+  }
+
+  @override
+  void dispose() {
+    WebViewCanvasController().hasContent.removeListener(_onHasContent);
+    WebViewCanvasController()._onDispose(_ctrl);
+    super.dispose();
+  }
+
+  /// 截取 WebView 画面，存入 _screenshot，然后隐藏 WebView（触发 build 返回 Image）。
+  Future<void> _captureAndFreeze() async {
+    if (!mounted) return;
+    try {
+      // 等一小段让 CSS 动画/过渡完成
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      // JS 方案：查找 canvas 元素获取 dataURL，回退到截取 body
+      final result = await _ctrl.runJavaScriptReturningResult('''
+        (function(){
+          var c=document.querySelector('canvas');
+          if(c){ return c.toDataURL('image/png'); }
+          return null;
+        })()
+      ''');
+      if (result is String && result.startsWith('data:image')) {
+        final base64 = result.split(',').last;
+        final bytes = base64Decode(base64);
+        if (mounted) setState(() {
+          _screenshot = bytes;
+          _shouldRender = false;
+        });
+      }
+    } catch (_) {
+      // 截图不可用，保持 WebView 显示
+    }
+  }
+
+  void _onHasContent() {
+    if (!mounted) return;
+    final ctrl = WebViewCanvasController();
+    if (ctrl.hasContent.value) {
+      // 新内容 → 清旧截图，重新渲染 WebView
+      _screenshot = null;
+      final html = ctrl._lastHtml ?? WebViewCanvasController.blankPage;
+      _ctrl.loadHtmlString(html);
+      if (!_shouldRender) setState(() => _shouldRender = true);
+    }
   }
 
   Future<void> _loadStartup() async {
@@ -225,22 +292,32 @@ class _WebViewCanvasState extends State<WebViewCanvas> {
     } catch (_) {
       html = WebViewCanvasController.blankPage;
     }
-    if (mounted) {
-      _ctrl.loadHtmlString(html);
-      _loaded = true;
-      if (mounted) setState(() {});
+    final isBlank = html == WebViewCanvasController.blankPage;
+    if (isBlank) {
+      WebViewCanvasController().hasContent.value = false;
+      if (mounted) setState(() => _loaded = true);
+    } else {
+      WebViewCanvasController().hasContent.value = true;
+      if (mounted) {
+        _ctrl.loadHtmlString(html);
+        _loaded = true;
+        _shouldRender = true;
+        if (mounted) setState(() {});
+      }
     }
   }
 
   @override
-  void dispose() {
-    WebViewCanvasController()._onDispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!_loaded) return const SizedBox.shrink();
+    // 有截图 → 显示静态图片，零 PlatformView 开销
+    if (_screenshot != null) {
+      return Positioned.fill(
+        child: Image.memory(_screenshot!, fit: BoxFit.cover),
+      );
+    }
+    // 没有内容 → 不渲染
+    if (!_loaded || !_shouldRender) return const SizedBox.shrink();
+    // 正在渲染 → WebView（短暂存在）
     return WebViewWidget(controller: _ctrl);
   }
 }

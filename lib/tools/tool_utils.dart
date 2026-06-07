@@ -1,4 +1,8 @@
-/// Shared safe argument parsing utilities for tool handlers.
+// ═══════════════════════════════════════════════════════════════
+// Solvhen — AI手机智能体 | 世于我愿
+// 工具通用工具函数——颜色解析/参数提取/结果格式化
+// ═══════════════════════════════════════════════════════════════
+
 ///
 /// Use these instead of bare `as T` casts on `args` values — the LLM
 /// may pass strings for ints, ints for bools, or any unexpected type,
