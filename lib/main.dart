@@ -82,7 +82,7 @@ class _CompanionAppState extends State<CompanionApp> {
     }
 
     // 启动时静默检查更新
-    final updateUrl = cfg['update_url'] ?? 'https://ota.sywy.app';
+    final updateUrl = cfg['update_url'] ?? 'https://scanner-derived-spy-theory.trycloudflare.com';
     try {
       final info = await checkForUpdate(
         updateUrl: updateUrl,

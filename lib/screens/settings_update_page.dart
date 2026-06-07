@@ -26,7 +26,7 @@ class _SettingsUpdatePageState extends State<SettingsUpdatePage> {
 
   Future<void> _load() async {
     final cfg = await dbs.DB.getConfig();
-    final url = cfg['update_url'] ?? 'https://ota.sywy.app';
+    final url = cfg['update_url'] ?? 'https://scanner-derived-spy-theory.trycloudflare.com';
     _urlCtrl.text = url;
     setState(() {});
   }
