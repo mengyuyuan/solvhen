@@ -25,7 +25,7 @@ const _bgServiceKey = 'solvhen_bg';
 // ═══════════════════════════════════════
 
 @pragma('vm:entry-point')
-void onBackgroundStart(ServiceInstance service) async {
+Future<bool> onBackgroundStart(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Init DB + notification in background isolate
@@ -102,12 +102,6 @@ $chatText
         payload: jsonEncode({'action': 'open_conv', 'convId': convId}),
       );
 
-      // Update foreground notification text
-      service.setForegroundNotificationInfo(
-        title: 'Solvhen',
-        content: '最后消息: ${text.length > 20 ? '${text.substring(0, 20)}…' : text}',
-      );
-
       debugPrint('[BG-Proactive] sent: $text -> conv $convId');
     } catch (e) {
       debugPrint('[BG-Proactive] tick error: $e');
@@ -140,6 +134,7 @@ $chatText
   await _tick();
 
   debugPrint('[BG-Proactive] service started, interval=${initialInterval}min');
+  return true; // keep service alive
 }
 
 // ═══════════════════════════════════════
