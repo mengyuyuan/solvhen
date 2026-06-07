@@ -17,6 +17,7 @@ import 'settings_persona_page.dart';
 import 'settings_about_page.dart';
 import 'settings_onebot_page.dart';
 import 'settings_profile_page.dart';
+import 'settings_update_page.dart';
 
 /// 设置主页面——各设置模块入口导航
 /// UI设计：竖排列表+玻璃态卡片+push导航，禁用TabBar
@@ -39,6 +40,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> with TickerProv
     (icon: Icons.movie_creation_rounded, title: '视频生成', subtitle: 'Kling · Runway · ComfyUI'),
     (icon: Icons.face_rounded, title: '自定义人格', subtitle: '场景叠加 · 基底不替换'),
     (icon: Icons.chat_rounded, title: 'QQ/微信 桥接', subtitle: 'OneBot · NapCatQQ · 自动回复'),
+    (icon: Icons.system_update_rounded, title: '检查更新', subtitle: 'OTA 在线更新'),
     (icon: Icons.info_outline_rounded, title: '关于 Solvhen', subtitle: '更新日志'),
   ];
 
@@ -50,6 +52,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> with TickerProv
     SettingsVideoPage(),
     SettingsPersonaPage(),
     SettingsOneBotPage(),
+    SettingsUpdatePage(),
     SettingsAboutPage(),
   ];
 

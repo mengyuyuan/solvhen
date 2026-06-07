@@ -15,6 +15,7 @@ import 'services/notification_service.dart';
 import 'services/voice_service.dart';
 import 'services/onebot_bridge.dart';
 import 'services/proactive_service.dart';
+import 'services/update_service.dart';
 import 'services/api_service.dart';
 import 'services/database_service.dart';
 import 'services/tool_executor.dart';
@@ -78,6 +79,18 @@ class _CompanionAppState extends State<CompanionApp> {
       final mins = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
       await startProactive(intervalMinutes: mins);
     }
+
+    // 启动时静默检查更新（不弹窗，只在设置页显示）
+    final updateUrl = cfg['update_url'] ?? 'https://ota.sywy.app';
+    try {
+      final info = await checkForUpdate(
+        updateUrl: updateUrl,
+        currentVersionCode: 2, // sync with pubspec version
+      );
+      if (info != null) {
+        debugPrint('[Update] new version available: ${info.version}');
+      }
+    } catch (_) {}
   }
 
   @override

@@ -133,7 +133,7 @@ Future<void> startProactive({required int intervalMinutes}) async {
       _wmTaskName,
       frequency: const Duration(minutes: 15),
       constraints: Constraints(networkType: NetworkType.connected),
-      existingWorkPolicy: ExistingWorkPolicy.replace,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
     );
     debugPrint('[Proactive] WorkManager registered (15min fallback)');
   } catch (e) {
