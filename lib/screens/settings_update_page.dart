@@ -48,7 +48,7 @@ class _SettingsUpdatePageState extends State<SettingsUpdatePage> {
     try {
       final url = _urlCtrl.text.trim();
       final pkg = await dbs.DB.getConfig();
-      final currentCode = int.tryParse(pkg['version_code'] ?? '2') ?? 2;
+      final currentCode = int.tryParse(pkg['version_code'] ?? '4') ?? 4;
       final update = await checkForUpdate(
         updateUrl: url,
         currentVersionCode: currentCode,

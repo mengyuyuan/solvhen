@@ -64,6 +64,14 @@ Future<bool> isProactiveRunning() async {
 
 Timer? _timer;
 bool _ticking = false;
+DateTime? _lastTickAt;
+String? _lastError;
+
+/// 获取上次 tick 执行时间（null = 从未执行）
+DateTime? getLastTickTime() => _lastTickAt;
+
+/// 获取上次错误信息
+String? getLastError() => _lastError;
 
 void _scheduleTick(int minutes) {
   _timer?.cancel();
@@ -155,8 +163,12 @@ $chatText
       payload: jsonEncode({'action': 'open_conv', 'convId': convId}),
     );
 
+    _lastTickAt = DateTime.now();
+    _lastError = null;
     debugPrint('[Proactive] sent: $text -> conv $convId');
   } catch (e) {
+    _lastError = '$e';
+    await DB.setConfig('last_proactive_error', '$e');
     debugPrint('[Proactive] tick error: $e');
   } finally {
     _ticking = false;

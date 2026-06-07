@@ -71,6 +71,11 @@ class _CompanionAppState extends State<CompanionApp> {
     VoiceService().init();
     _initOneBot();
     final cfg = await DB.getConfig();
+    // 首次或版本变更时写入 version_code
+    final storedVersion = int.tryParse(cfg['version_code'] ?? '0') ?? 0;
+    if (storedVersion < 4) {
+      await DB.setConfig('version_code', '4');
+    }
     if (cfg['proactive_enabled'] == 'true') {
       final mins = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
       await startProactive(intervalMinutes: mins);
@@ -81,7 +86,7 @@ class _CompanionAppState extends State<CompanionApp> {
     try {
       final info = await checkForUpdate(
         updateUrl: updateUrl,
-        currentVersionCode: 3,
+        currentVersionCode: 4,
       );
       if (info != null) {
         debugPrint('[Update] new version available: ${info.version}');

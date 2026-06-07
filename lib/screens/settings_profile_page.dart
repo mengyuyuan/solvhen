@@ -141,23 +141,32 @@ class _SettingsProfilePageState extends State<SettingsProfilePage> {
                           Text('4小时', style: TextStyle(fontSize: 11, color: cs)),
                         ]),
                         const SizedBox(height: 12),
-                        FutureBuilder<bool>(
-                          future: isProactiveRunning(),
+                        FutureBuilder<DateTime?>(
+                          future: (() async { try { return getLastTickTime(); } catch(_) { return null; } })(),
                           builder: (_, snap) {
-                            final running = snap.data ?? false;
-                            return Row(children: [
-                              Container(
-                                width: 8, height: 8,
-                                decoration: BoxDecoration(
-                                  color: running ? const Color(0xFF34C759) : const Color(0xFFFF9500),
-                                  shape: BoxShape.circle,
+                            final last = snap.data;
+                            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Row(children: [
+                                Container(
+                                  width: 8, height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFF34C759),
+                                    shape: BoxShape.circle,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                running ? '运行中（WorkManager）' : '等待启动…',
-                                style: TextStyle(fontSize: 13, color: cs),
-                              ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '运行中（Timer）',
+                                  style: TextStyle(fontSize: 13, color: cs),
+                                ),
+                              ]),
+                              if (last != null) ...[
+                                const SizedBox(height: 6),
+                                Text(
+                                  '上次: ${last.hour.toString().padLeft(2, "0")}:${last.minute.toString().padLeft(2, "0")}:${last.second.toString().padLeft(2, "0")}',
+                                  style: TextStyle(fontSize: 11, color: cs),
+                                ),
+                              ]
                             ]);
                           },
                         ),
