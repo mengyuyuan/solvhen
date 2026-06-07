@@ -94,7 +94,7 @@ Future<void> _tick() async {
     final lastActivity = cfg['last_activity_at'];
     if (lastActivity != null) {
       final lastTime = DateTime.tryParse(lastActivity);
-      if (lastTime != null && now.difference(lastTime).inMinutes < 5) {
+      if (lastTime != null && now.difference(lastTime).inMinutes < 2) {
         debugPrint('[Proactive] skipped — user active recently');
         return;
       }
