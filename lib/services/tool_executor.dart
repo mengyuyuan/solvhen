@@ -54,11 +54,13 @@ class ToolExecutor {
   }
 
   // Compiled-once regexes — avoids recompilation on every call.
+  // Standard XML
   static final _invokeRe = RegExp(r'<invoke\s+name="(\w+)"\s*>(.*?)</invoke>', dotAll: true);
-  static final _dsmlInvokeRe = RegExp(r'<\s*\|*\s*DSML\s*\|*\s*invoke\s+name="(\w+)"[^>]*>(.*?)</\s*\|*\s*DSML\s*\|*\s*invoke\s*>', dotAll: true);
-  static final _paramBlockRe = RegExp(r'<parameter[^>]*>(.*?)</parameter>', dotAll: true);
-  static final _dsmlParamRe = RegExp(r'<\s*\|*\s*DSML\s*\|*\s*parameter[^>]*>(.*?)</\s*\|*\s*DSML\s*\|*\s*parameter\s*>', dotAll: true);
+  static final _paramBlockRe = RegExp(r'<parameter\b[^>]*>(.*?)</parameter>', dotAll: true);
   static final _nameRe = RegExp(r'name="(\w+)"');
+  // DSML: match ANY tag containing "DSML" (bulletproof against format variations)
+  static final _dsmlInvokeRe = RegExp(r'<[^>]*DSML[^>]*invoke\s+name="(\w+)"[^>]*>(.*?)</[^>]*DSML[^>]*invoke[^>]*>', dotAll: true);
+  static final _dsmlParamRe = RegExp(r'<[^>]*DSML[^>]*parameter[^>]*>(.*?)</[^>]*DSML[^>]*parameter[^>]*>', dotAll: true);
 
   /// DeepSeek sometimes returns tool calls as XML inside content text
   /// instead of in the tool_calls array. Parse them out.
@@ -114,9 +116,9 @@ class ToolExecutor {
   static final _sHtmlRe = RegExp(r'```html?\s*\n[\s\S]*?```', dotAll: true);
   static final _sCssRe = RegExp(r'```css\s*\n[\s\S]*?```', dotAll: true);
   static final _sBlankRe = RegExp(r'\n{3,}');
-  // DSML format: <|DSML|invoke name="...">...</|DSML|invoke>  (supports 0-2 pipes)
-  static final _sDsmlBlock = RegExp(r'<\s*\|*\s*DSML\s*\|*\s*\w+\b[^>]*>.*?</\s*\|*\s*DSML\s*\|*\s*\w+\s*>', dotAll: true);
-  static final _sDsmlTag = RegExp(r'</?\s*\|*\s*DSML\s*\|*\s*\w+[^>]*>', dotAll: true);
+  // Ultra-aggressive DSML stripping: match ANY tag containing "DSML"
+  static final _sDsmlAny = RegExp(r'<[^>]*DSML[^>]*>', dotAll: true);
+  static final _sDsmlBlockAny = RegExp(r'<[^>]*DSML[^>]*>.*?</[^>]*DSML[^>]*>', dotAll: true);
 
   /// Strip XML tool call blocks from content for clean display.
   static String stripToolCallsFromContent(String content) {
@@ -129,8 +131,8 @@ class ToolExecutor {
     c = c.replaceAll(_sHtmlRe, '');
     c = c.replaceAll(_sCssRe, '');
     c = c.replaceAll(_sBlankRe, '\n\n');
-    c = c.replaceAll(_sDsmlBlock, '');
-    c = c.replaceAll(_sDsmlTag, '');
+    c = c.replaceAll(_sDsmlBlockAny, '');
+    c = c.replaceAll(_sDsmlAny, '');
     return c.trim();
   }
 

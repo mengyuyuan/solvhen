@@ -9,11 +9,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'api_service.dart';
 import 'database_service.dart';
-import 'memory_service.dart';
 import 'tool_executor.dart';
 import '../services/notification_service.dart';
 
-/// 主动消息服务 — 单例，按配置的间隔定时推送消息
+/// 主动消息服务 — 单例，前台常驻通知保活 + 按配置间隔定时推送
 class ProactiveService {
   static final ProactiveService _instance = ProactiveService._();
   factory ProactiveService() => _instance;
@@ -21,10 +20,11 @@ class ProactiveService {
 
   Timer? _timer;
   bool _running = false;
+  static const _keeperId = 999; // 前台常驻通知ID
 
   bool get isRunning => _running;
 
-  /// 启动定时器（根据 DB 配置）
+  /// 启动定时器 + 前台常驻通知（防止 Android 杀进程）
   Future<void> start() async {
     await stop();
     final cfg = await DB.getConfig();
@@ -33,10 +33,22 @@ class ProactiveService {
 
     final minutesStr = cfg['proactive_interval'] ?? '30';
     final minutes = int.tryParse(minutesStr) ?? 30;
-    if (minutes < 5) return; // 最少5分钟
+    if (minutes < 1) return;
 
     _running = true;
     debugPrint('[Proactive] started, interval: ${minutes}min');
+
+    // 前台常驻通知 — 保活
+    await NotificationService().show(
+      id: _keeperId,
+      title: 'Solvhen',
+      body: '主动消息运行中（每${minutes}分钟）',
+      payload: 'proactive_keeper',
+      ongoing: true,
+    );
+
+    // 首次 tick 不延迟，立刻验证
+    await _tick();
     _scheduleNext(Duration(minutes: minutes));
   }
 
@@ -45,11 +57,10 @@ class ProactiveService {
     _timer = Timer(delay, () async {
       if (!_running) return;
       await _tick();
-      // 读取最新配置，可能用户改了间隔
       final cfg = await DB.getConfig();
       final minutesStr = cfg['proactive_interval'] ?? '30';
       final minutes = int.tryParse(minutesStr) ?? 30;
-      _scheduleNext(Duration(minutes: minutes.clamp(5, 1440)));
+      _scheduleNext(Duration(minutes: minutes.clamp(1, 1440)));
     });
   }
 
@@ -57,17 +68,24 @@ class ProactiveService {
     _running = false;
     _timer?.cancel();
     _timer = null;
+    // 取消常驻通知
+    await NotificationService().cancel(_keeperId);
   }
 
   /// 生成一条主动消息并推送
   Future<void> _tick() async {
     try {
-      final mem = MemoryService();
       final api = ApiService();
 
-      // 获取最近的记忆和对话上下文
-      final memories = await mem.getTopMemories(limit: 10);
-      final memText = memories.map((m) => '- [${m.category}] ${m.content}').join('\n');
+      // 获取全局记忆（global_memories 表，与 consolidateConversation 写入一致）
+      final globalMems = await DB.getGlobalMemories();
+      final memBuf = StringBuffer();
+      for (final entry in globalMems.entries) {
+        for (final content in entry.value) {
+          memBuf.writeln('- [${entry.key}] $content');
+        }
+      }
+      final memText = memBuf.toString();
 
       final prompt = '''你是 Solvhen，正在主动联系你的用户。这不是对方发起的对话——是你主动的。
 
@@ -93,7 +111,6 @@ $memText
       final text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
       if (text.isEmpty || text == '[SKIP]') return;
 
-      // 推送系统通知
       await NotificationService().show(
         title: 'Solvhen',
         body: text,

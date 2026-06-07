@@ -33,6 +33,7 @@ class NotificationService {
   Stream<PushEvent> get onPush => _pushController.stream;
 
   bool _initialized = false;
+  int _seq = 0;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -73,27 +74,29 @@ class NotificationService {
 
   void _onTap(NotificationResponse response) {
     debugPrint('[NotificationService] tapped: ${response.payload}');
-    // Tapping a notification opens the app — handled by Android intent.
-    // The payload can be used to route to a specific conversation, etc.
   }
 
   /// Show a system notification. Also emits to the in-app overlay stream.
+  /// [ongoing] = true for foreground service persistent notifications.
   Future<void> show({
     required String title,
     required String body,
     String? payload,
+    int? id,
+    bool ongoing = false,
   }) async {
     if (!_initialized) {
       debugPrint('[NotificationService] not initialized, skipping push');
       return;
     }
 
-    // System notification
+    final notificationId = id ?? (_seq++);
+
     await _plugin.show(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      id: notificationId,
       title: title,
       body: body,
-      notificationDetails: const NotificationDetails(
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           'solvhen_messages',
           'Solvhen 主动消息',
@@ -101,15 +104,26 @@ class NotificationService {
           importance: Importance.high,
           priority: Priority.high,
           icon: '@mipmap/ic_launcher',
-          enableVibration: true,
+          enableVibration: !ongoing,
+          playSound: !ongoing,
+          ongoing: ongoing,
+          autoCancel: !ongoing,
         ),
         iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
       ),
       payload: payload,
     );
 
-    // In-app overlay
-    _pushController.add(PushEvent(title: title, body: body, payload: payload));
+    // In-app overlay (skip for keeper notifications)
+    if (!ongoing) {
+      _pushController.add(PushEvent(title: title, body: body, payload: payload));
+    }
+  }
+
+  /// Cancel a notification by ID
+  Future<void> cancel(int id) async {
+    if (!_initialized) return;
+    await _plugin.cancel(id: id);
   }
 
   void dispose() {

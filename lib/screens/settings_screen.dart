@@ -16,6 +16,7 @@ import 'settings_video_page.dart';
 import 'settings_persona_page.dart';
 import 'settings_about_page.dart';
 import 'settings_onebot_page.dart';
+import 'settings_profile_page.dart';
 
 /// 设置主页面——各设置模块入口导航
 /// UI设计：竖排列表+玻璃态卡片+push导航，禁用TabBar
@@ -31,6 +32,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> with TickerProv
 
   // 6个设置入口 — icon + 标题 + 副标题
   static const _items = [
+    (icon: Icons.person_rounded, title: '个人设置', subtitle: '主动消息 · 偏好'),
     (icon: Icons.psychology_rounded, title: 'LLM 模型', subtitle: '模型链 · 降级策略 · 多厂商'),
     (icon: Icons.record_voice_over_rounded, title: 'TTS 语音', subtitle: '引擎 · 音色 · 克隆'),
     (icon: Icons.image_rounded, title: '图片生成', subtitle: '147ai · DALL-E · ComfyUI'),
@@ -41,6 +43,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> with TickerProv
   ];
 
   static const _pages = [
+    SettingsProfilePage(),
     SettingsLlmPage(),
     SettingsTtsPage(),
     SettingsImagePage(),

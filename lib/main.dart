@@ -62,10 +62,14 @@ class _CompanionAppState extends State<CompanionApp> {
     super.initState();
     _theme.addListener(_onThemeChange);
     _theme.loadFromDB();
-    NotificationService().init();
+    _initAsync(); // Fire-and-forget async startup
+  }
+  
+  Future<void> _initAsync() async {
+    await NotificationService().init();
     VoiceService().init();
     _initOneBot();
-    ProactiveService().start(); // 启动主动消息定时器
+    await ProactiveService().start();
   }
 
   @override
