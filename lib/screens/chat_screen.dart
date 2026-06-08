@@ -1194,7 +1194,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// Strip any residual XML tool-call markup from display text.
   /// Delegates to ToolExecutor for unified stripping logic (same as API layer).
   String _cleanDisplay(String text) {
-    if (!text.contains('<')) return text;
     return ToolExecutor.stripToolCallsFromContent(text);
   }
 }

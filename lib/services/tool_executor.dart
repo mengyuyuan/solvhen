@@ -54,7 +54,7 @@ class ToolExecutor {
   }
 
   // Compiled-once regexes — avoids recompilation on every call.
-  // Standard XML
+  // Standard XML. Dart raw strings use single backslashes for regex tokens.
   static final _invokeRe = RegExp(r'<invoke\s+name="(\w+)"\s*>(.*?)</invoke>', dotAll: true);
   static final _paramBlockRe = RegExp(r'<parameter\b[^>]*>(.*?)</parameter>', dotAll: true);
   static final _nameRe = RegExp(r'name="(\w+)"');
@@ -72,7 +72,7 @@ class ToolExecutor {
     if (matches.isEmpty) {
       matches = _dsmlInvokeRe.allMatches(content);
     }
-    if (kDebugMode) debugPrint('[PARSE-XML] content_len=${content.length} match_count=${matches.length} first20=${content.length > 20 ? content.substring(0, 20) : content}');
+    if (kDebugMode) debugPrint('[PARSE-XML] content_len=${content.length} match_count=${matches.length}');
     if (matches.isEmpty) return null;
 
     final calls = <ToolCall>[];
@@ -106,7 +106,10 @@ class ToolExecutor {
     return calls.isEmpty ? null : calls;
   }
 
-  // Compiled-once display cleaning regexes
+  // Compiled-once display cleaning regexes. DSML stripping runs before generic
+  // tags so malformed DeepSeek DSML blocks cannot leak into UI/DB display paths.
+  static final _sDsmlBlockAny = RegExp(r'<[^>]*DSML[^>]*>.*?</[^>]*DSML[^>]*>', dotAll: true);
+  static final _sDsmlAny = RegExp(r'<[^>]*DSML[^>]*>', dotAll: true);
   static final _sInvokeRe = RegExp(r'<invoke\b[^>]*>.*?</invoke>', dotAll: true);
   static final _sParamRe = RegExp(r'<parameter\b[^>]*>.*?</parameter>', dotAll: true);
   static final _sTagRe = RegExp(r'</?(?:invoke|parameter|tool_calls)\b[^>]*>', dotAll: true);
@@ -115,13 +118,12 @@ class ToolExecutor {
   static final _sHtmlRe = RegExp(r'```html?\s*\n[\s\S]*?```', dotAll: true);
   static final _sCssRe = RegExp(r'```css\s*\n[\s\S]*?```', dotAll: true);
   static final _sBlankRe = RegExp(r'\n{3,}');
-  // Ultra-aggressive DSML stripping: match ANY tag containing "DSML"
-  static final _sDsmlAny = RegExp(r'<[^>]*DSML[^>]*>', dotAll: true);
-  static final _sDsmlBlockAny = RegExp(r'<[^>]*DSML[^>]*>.*?</[^>]*DSML[^>]*>', dotAll: true);
 
   /// Strip XML tool call blocks from content for clean display.
   static String stripToolCallsFromContent(String content) {
     var c = content;
+    c = c.replaceAll(_sDsmlBlockAny, '');
+    c = c.replaceAll(_sDsmlAny, '');
     c = c.replaceAll(_sInvokeRe, '');
     c = c.replaceAll(_sParamRe, '');
     c = c.replaceAll(_sTagRe, '');
@@ -130,8 +132,6 @@ class ToolExecutor {
     c = c.replaceAll(_sHtmlRe, '');
     c = c.replaceAll(_sCssRe, '');
     c = c.replaceAll(_sBlankRe, '\n\n');
-    c = c.replaceAll(_sDsmlBlockAny, '');
-    c = c.replaceAll(_sDsmlAny, '');
     return c.trim();
   }
 

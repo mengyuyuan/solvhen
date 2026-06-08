@@ -71,6 +71,8 @@ void registerProactiveTools() {
       return jsonEncode({
         'enabled': cfg['proactive_enabled'] == 'true',
         'interval_minutes': int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30,
+        'last_tick': cfg['last_proactive_tick'],
+        'last_error': cfg['last_proactive_error'],
         'note': '定时主动发消息，最低1分钟',
       });
     },

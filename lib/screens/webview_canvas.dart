@@ -130,6 +130,7 @@ class WebViewCanvasController {
   /// Clear all canvas content — reset to blank transparent page.
   Future<void> clearCanvas() async {
     _lastHtml = null;
+    hasContent.value = false;
     try { await DB.setConfig('canvas_html', ''); } catch (_) {}
     final controllers = List<WebViewController>.from(_controllers);
     for (final ctrl in controllers) {
@@ -260,29 +261,48 @@ class _WebViewCanvasState extends State<WebViewCanvas> {
           return null;
         })()
       ''');
-      if (result is String && result.startsWith('data:image')) {
-        final base64 = result.split(',').last;
+      final dataUrl = result is String
+          ? result.replaceAll(RegExp(r'^"|"$'), '')
+          : '';
+      if (dataUrl.startsWith('data:image')) {
+        final base64 = dataUrl.split(',').last;
         final bytes = base64Decode(base64);
-        if (mounted) setState(() {
-          _screenshot = bytes;
-          _shouldRender = false;
-        });
+        if (mounted) {
+          setState(() {
+            _screenshot = bytes;
+            _shouldRender = false;
+          });
+        }
+        return;
       }
+      // DOM-only HTML cannot be captured through webview_flutter. Keeping an
+      // Android PlatformView alive behind Flutter content can render as a black
+      // overlay above the UI, so fail safe: remove WebView instead of risking
+      // black screen. Canvas-based render_html keeps working via dataURL above.
+      if (mounted) setState(() => _shouldRender = false);
     } catch (_) {
-      // 截图不可用，保持 WebView 显示
+      // 截图不可用时也移除 WebView，避免黑屏覆盖聊天层。
+      if (mounted) setState(() => _shouldRender = false);
     }
   }
 
   void _onHasContent() {
     if (!mounted) return;
     final ctrl = WebViewCanvasController();
-    if (ctrl.hasContent.value) {
-      // 新内容 → 清旧截图，重新渲染 WebView
-      _screenshot = null;
-      final html = ctrl._lastHtml ?? WebViewCanvasController.blankPage;
-      _ctrl.loadHtmlString(html);
-      if (!_shouldRender) setState(() => _shouldRender = true);
+    if (!ctrl.hasContent.value) {
+      // 清空画布后彻底移除 PlatformView，避免透明 WebView 在 Android 上黑屏覆盖。
+      setState(() {
+        _screenshot = null;
+        _shouldRender = false;
+        _loaded = true;
+      });
+      return;
     }
+    // 新内容 → 清旧截图，重新渲染 WebView
+    _screenshot = null;
+    final html = ctrl._lastHtml ?? WebViewCanvasController.blankPage;
+    _ctrl.loadHtmlString(html);
+    if (!_shouldRender) setState(() => _shouldRender = true);
   }
 
   Future<void> _loadStartup() async {
@@ -311,13 +331,14 @@ class _WebViewCanvasState extends State<WebViewCanvas> {
   Widget build(BuildContext context) {
     // 有截图 → 显示静态图片，零 PlatformView 开销
     if (_screenshot != null) {
-      return Positioned.fill(
+      return SizedBox.expand(
         child: Image.memory(_screenshot!, fit: BoxFit.cover),
       );
     }
     // 没有内容 → 不渲染
     if (!_loaded || !_shouldRender) return const SizedBox.shrink();
-    // 正在渲染 → WebView（短暂存在）
-    return WebViewWidget(controller: _ctrl);
+    // 正在渲染 → WebView（短暂存在）。必须填满父 Stack，给 Android
+    // PlatformView tight constraints；裸 WebViewWidget 会偶发 0 尺寸/黑层覆盖。
+    return SizedBox.expand(child: WebViewWidget(controller: _ctrl));
   }
 }

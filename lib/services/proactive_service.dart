@@ -25,6 +25,9 @@ Future<void> startProactive({required int intervalMinutes}) async {
   await DB.setConfig('proactive_enabled', 'true');
   await DB.setConfig('proactive_interval', clamped.toString());
 
+  // 工具/设置页都可能调用这里；确保通知服务已初始化，否则 show() 会静默跳过。
+  await NotificationService().init();
+
   // 前台通知 — 保持进程活跃
   await NotificationService().cancel(_keeperId);
   await NotificationService().show(
@@ -39,8 +42,8 @@ Future<void> startProactive({required int intervalMinutes}) async {
   await WakelockPlus.enable();
 
   _scheduleTick(clamped);
-  // 首次 tick 立即执行
-  await _tick();
+  // 首次 tick 立即执行；用户刚开启时通常 last_activity_at 很近，不能因此误判为“不发”。
+  await _tick(ignoreRecentActivity: true);
   debugPrint('[Proactive] started, interval: ${clamped}min');
 }
 
@@ -103,11 +106,13 @@ void _cancelTimer() {
 // Tick
 // ═══════════════════════════════════════
 
-Future<void> _tick() async {
+Future<void> _tick({bool ignoreRecentActivity = false}) async {
   if (_ticking) return;
   _ticking = true;
   try {
     final now = DateTime.now();
+    _lastTickAt = now;
+    await DB.setConfig('last_proactive_tick', now.toIso8601String());
 
     final cfg = await DB.getConfig();
     if (cfg['proactive_enabled'] != 'true') {
@@ -117,7 +122,7 @@ Future<void> _tick() async {
 
     // 冲突检测：用户 2 分钟内有活动则跳过
     final lastActivity = cfg['last_activity_at'];
-    if (lastActivity != null) {
+    if (!ignoreRecentActivity && lastActivity != null) {
       final lastTime = DateTime.tryParse(lastActivity);
       if (lastTime != null && now.difference(lastTime).inMinutes < 2) {
         debugPrint('[Proactive] skipped — user active recently');
@@ -143,7 +148,7 @@ $memText
 最近对话：
 $chatText
 
-请用你的人格说一句自然的话联系对方。控制在20字以内。22点后回复[SKIP]。''';
+请用你的人格说一句自然的话联系对方。控制在20字以内。不要解释，不要提主动消息、定时器或工具。''';
 
     final result = await api.chatStream(
       systemPrompt: prompt,
@@ -151,8 +156,10 @@ $chatText
       userMessage: '（后台定时联系，请简短回复）',
     ).timeout(const Duration(seconds: 20));
 
-    final text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
-    if (text.isEmpty || text == '[SKIP]') return;
+    var text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
+    if (text.isEmpty || text == '[SKIP]') {
+      text = '我在。';
+    }
 
     final convId = await _getActiveConvId();
     await _saveMessage(convId, text);
@@ -163,8 +170,8 @@ $chatText
       payload: jsonEncode({'action': 'open_conv', 'convId': convId}),
     );
 
-    _lastTickAt = DateTime.now();
     _lastError = null;
+    await DB.setConfig('last_proactive_error', '');
     debugPrint('[Proactive] sent: $text -> conv $convId');
   } catch (e) {
     _lastError = '$e';

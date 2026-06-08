@@ -254,9 +254,6 @@ class ApiService {
           final codes = content.substring(0, content.length < 30 ? content.length : 30).codeUnits;
           debugPrint('[API-HEX] first 30 bytes hex: ${codes.map((c) => c.toRadixString(16).padLeft(2, "0")).join(" ")}');
         }
-        if (content.isNotEmpty && content.length < 500) {
-          debugPrint('[API-RAW-CONTENT] $content');
-        }
       }
       final parsedFromXml = ToolExecutor.parseToolCallsFromContent(content);
       if (parsedFromXml != null) {
