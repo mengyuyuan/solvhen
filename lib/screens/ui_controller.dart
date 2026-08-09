@@ -17,7 +17,8 @@ class AnimationStep {
   final String target;
   final List<Keyframe> keyframes;
   final String? curve;
-  const AnimationStep({required this.target, required this.keyframes, this.curve});
+  const AnimationStep(
+      {required this.target, required this.keyframes, this.curve});
 }
 
 class Keyframe {
@@ -26,7 +27,12 @@ class Keyframe {
   final double to;
   final int duration;
   final String? curve;
-  const Keyframe({required this.prop, required this.from, required this.to, this.duration = 300, this.curve});
+  const Keyframe(
+      {required this.prop,
+      required this.from,
+      required this.to,
+      this.duration = 300,
+      this.curve});
 }
 
 class ParticleConfig {
@@ -60,53 +66,70 @@ class ScreenMood {
   final List<Map<String, dynamic>>? bgEffects;
 
   const ScreenMood({
-    this.primary, this.accent, this.bgTop, this.bgBottom,
-    this.vignetteIntensity, this.vignetteColor, this.particleDensity,
-    this.particleSpeed, this.bgStyle, this.particleColor,
+    this.primary,
+    this.accent,
+    this.bgTop,
+    this.bgBottom,
+    this.vignetteIntensity,
+    this.vignetteColor,
+    this.particleDensity,
+    this.particleSpeed,
+    this.bgStyle,
+    this.particleColor,
     this.bgEffects,
   });
 
   ScreenMood merge(ScreenMood other) => ScreenMood(
-    primary: other.primary ?? primary,
-    accent: other.accent ?? accent,
-    bgTop: other.bgTop ?? bgTop,
-    bgBottom: other.bgBottom ?? bgBottom,
-    vignetteIntensity: other.vignetteIntensity ?? vignetteIntensity,
-    vignetteColor: other.vignetteColor ?? vignetteColor,
-    particleDensity: other.particleDensity ?? particleDensity,
-    particleSpeed: other.particleSpeed ?? particleSpeed,
-    bgStyle: other.bgStyle ?? bgStyle,
-    particleColor: other.particleColor ?? particleColor,
-    bgEffects: other.bgEffects ?? bgEffects,
-  );
+        primary: other.primary ?? primary,
+        accent: other.accent ?? accent,
+        bgTop: other.bgTop ?? bgTop,
+        bgBottom: other.bgBottom ?? bgBottom,
+        vignetteIntensity: other.vignetteIntensity ?? vignetteIntensity,
+        vignetteColor: other.vignetteColor ?? vignetteColor,
+        particleDensity: other.particleDensity ?? particleDensity,
+        particleSpeed: other.particleSpeed ?? particleSpeed,
+        bgStyle: other.bgStyle ?? bgStyle,
+        particleColor: other.particleColor ?? particleColor,
+        bgEffects: other.bgEffects ?? bgEffects,
+      );
 
   Map<String, dynamic> toJson() => {
-    if (primary != null) 'primary': '#${primary!.value.toRadixString(16).padLeft(8, '0')}',
-    if (accent != null) 'accent': '#${accent!.value.toRadixString(16).padLeft(8, '0')}',
-    if (bgTop != null) 'bgTop': '#${bgTop!.value.toRadixString(16).padLeft(8, '0')}',
-    if (bgBottom != null) 'bgBottom': '#${bgBottom!.value.toRadixString(16).padLeft(8, '0')}',
-    if (vignetteIntensity != null) 'vignetteIntensity': vignetteIntensity,
-    if (vignetteColor != null) 'vignetteColor': '#${vignetteColor!.value.toRadixString(16).padLeft(8, '0')}',
-    if (particleDensity != null) 'particleDensity': particleDensity,
-    if (particleSpeed != null) 'particleSpeed': particleSpeed,
-    if (bgStyle != null) 'bgStyle': bgStyle,
-    if (particleColor != null) 'particleColor': '#${particleColor!.value.toRadixString(16).padLeft(8, '0')}',
-    // bgEffects intentionally excluded — transient visual effects should not survive restarts
-  };
+        if (primary != null)
+          'primary':
+              '#${primary!.toARGB32().toRadixString(16).padLeft(8, '0')}',
+        if (accent != null)
+          'accent': '#${accent!.toARGB32().toRadixString(16).padLeft(8, '0')}',
+        if (bgTop != null)
+          'bgTop': '#${bgTop!.toARGB32().toRadixString(16).padLeft(8, '0')}',
+        if (bgBottom != null)
+          'bgBottom':
+              '#${bgBottom!.toARGB32().toRadixString(16).padLeft(8, '0')}',
+        if (vignetteIntensity != null) 'vignetteIntensity': vignetteIntensity,
+        if (vignetteColor != null)
+          'vignetteColor':
+              '#${vignetteColor!.toARGB32().toRadixString(16).padLeft(8, '0')}',
+        if (particleDensity != null) 'particleDensity': particleDensity,
+        if (particleSpeed != null) 'particleSpeed': particleSpeed,
+        if (bgStyle != null) 'bgStyle': bgStyle,
+        if (particleColor != null)
+          'particleColor':
+              '#${particleColor!.toARGB32().toRadixString(16).padLeft(8, '0')}',
+        // bgEffects intentionally excluded — transient visual effects should not survive restarts
+      };
 
   factory ScreenMood.fromJson(Map<String, dynamic> json) => ScreenMood(
-    primary: _parseColor(json['primary']),
-    accent: _parseColor(json['accent']),
-    bgTop: _parseColor(json['bgTop']),
-    bgBottom: _parseColor(json['bgBottom']),
-    vignetteIntensity: (json['vignetteIntensity'] as num?)?.toDouble(),
-    vignetteColor: _parseColor(json['vignetteColor']),
-    particleDensity: (json['particleDensity'] as num?)?.toDouble(),
-    particleSpeed: (json['particleSpeed'] as num?)?.toDouble(),
-    bgStyle: json['bgStyle'] as String?,
-    particleColor: _parseColor(json['particleColor']),
-    bgEffects: null, // bgEffects are transient — never restore from DB
-  );
+        primary: _parseColor(json['primary']),
+        accent: _parseColor(json['accent']),
+        bgTop: _parseColor(json['bgTop']),
+        bgBottom: _parseColor(json['bgBottom']),
+        vignetteIntensity: (json['vignetteIntensity'] as num?)?.toDouble(),
+        vignetteColor: _parseColor(json['vignetteColor']),
+        particleDensity: (json['particleDensity'] as num?)?.toDouble(),
+        particleSpeed: (json['particleSpeed'] as num?)?.toDouble(),
+        bgStyle: json['bgStyle'] as String?,
+        particleColor: _parseColor(json['particleColor']),
+        bgEffects: null, // bgEffects are transient — never restore from DB
+      );
 
   static Color? _parseColor(String? hex) {
     if (hex == null) return null;
@@ -114,7 +137,9 @@ class ScreenMood {
       final h = hex.replaceFirst('#', '');
       final full = h.length == 6 ? 'FF$h' : h;
       return Color(int.parse(full, radix: 16));
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -128,23 +153,31 @@ class AvatarExpressionData {
   final double? particleDensity;
 
   const AvatarExpressionData({
-    this.eyeCurveL, this.eyeCurveR, this.pupilSize, this.mouthCurve,
-    this.mouthStyle, this.browAngleL, this.browAngleR,
-    this.glowIntensity, this.glowColor, this.particleDensity,
+    this.eyeCurveL,
+    this.eyeCurveR,
+    this.pupilSize,
+    this.mouthCurve,
+    this.mouthStyle,
+    this.browAngleL,
+    this.browAngleR,
+    this.glowIntensity,
+    this.glowColor,
+    this.particleDensity,
   });
 
-  AvatarExpressionData merge(AvatarExpressionData other) => AvatarExpressionData(
-    eyeCurveL: other.eyeCurveL ?? eyeCurveL,
-    eyeCurveR: other.eyeCurveR ?? eyeCurveR,
-    pupilSize: other.pupilSize ?? pupilSize,
-    mouthCurve: other.mouthCurve ?? mouthCurve,
-    mouthStyle: other.mouthStyle ?? mouthStyle,
-    browAngleL: other.browAngleL ?? browAngleL,
-    browAngleR: other.browAngleR ?? browAngleR,
-    glowIntensity: other.glowIntensity ?? glowIntensity,
-    glowColor: other.glowColor ?? glowColor,
-    particleDensity: other.particleDensity ?? particleDensity,
-  );
+  AvatarExpressionData merge(AvatarExpressionData other) =>
+      AvatarExpressionData(
+        eyeCurveL: other.eyeCurveL ?? eyeCurveL,
+        eyeCurveR: other.eyeCurveR ?? eyeCurveR,
+        pupilSize: other.pupilSize ?? pupilSize,
+        mouthCurve: other.mouthCurve ?? mouthCurve,
+        mouthStyle: other.mouthStyle ?? mouthStyle,
+        browAngleL: other.browAngleL ?? browAngleL,
+        browAngleR: other.browAngleR ?? browAngleR,
+        glowIntensity: other.glowIntensity ?? glowIntensity,
+        glowColor: other.glowColor ?? glowColor,
+        particleDensity: other.particleDensity ?? particleDensity,
+      );
 }
 
 /// UI控制器——屏幕情绪/背景效果/粒子密度/颜色主题的状态管理
@@ -183,7 +216,9 @@ class UIController extends ChangeNotifier {
       final h = hex.replaceFirst('#', '');
       final full = h.length == 6 ? 'FF$h' : h;
       return Color(int.parse(full, radix: 16));
-    } catch (_) { return null; }
+    } catch (_) {
+      return null;
+    }
   }
 
   bool _moodDirty = false;
@@ -281,7 +316,8 @@ class UIController extends ChangeNotifier {
   void setExpression(AvatarExpressionData expr) {
     _expression = (_expression ?? const AvatarExpressionData()).merge(expr);
     if (kDebugMode) {
-      debugPrint('[Solvhen:expr] eyeL=${_expression!.eyeCurveL} eyeR=${_expression!.eyeCurveR} mouth=${_expression!.mouthCurve} browL=${_expression!.browAngleL} glow=${_expression!.glowIntensity}');
+      debugPrint(
+          '[Solvhen:expr] eyeL=${_expression!.eyeCurveL} eyeR=${_expression!.eyeCurveR} mouth=${_expression!.mouthCurve} browL=${_expression!.browAngleL} glow=${_expression!.glowIntensity}');
     }
     notifyListeners();
   }
@@ -306,12 +342,14 @@ class UIController extends ChangeNotifier {
   void _saveBubbleColors() {
     try {
       if (_bubbleColor != null) {
-        DB.setConfig('bubble_color', '#${_bubbleColor!.value.toRadixString(16).padLeft(8, '0')}');
+        DB.setConfig('bubble_color',
+            '#${_bubbleColor!.toARGB32().toRadixString(16).padLeft(8, '0')}');
       } else {
         DB.setConfig('bubble_color', '');
       }
       if (_userBubbleColor != null) {
-        DB.setConfig('user_bubble_color', '#${_userBubbleColor!.value.toRadixString(16).padLeft(8, '0')}');
+        DB.setConfig('user_bubble_color',
+            '#${_userBubbleColor!.toARGB32().toRadixString(16).padLeft(8, '0')}');
       } else {
         DB.setConfig('user_bubble_color', '');
       }

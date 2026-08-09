@@ -10,6 +10,8 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import '../core/agent/cancellation.dart';
+import '../core/security/tool_security.dart';
 import 'api_service.dart';
 import 'tool_executor.dart';
 import '../tools/tool_registry.dart';
@@ -51,12 +53,12 @@ class SubAgentResult {
   });
 
   Map<String, dynamic> toJson() => {
-    'goal': goal,
-    'summary': summary,
-    'success': success,
-    'iterations': iterations,
-    if (error != null) 'error': error,
-  };
+        'goal': goal,
+        'summary': summary,
+        'success': success,
+        'iterations': iterations,
+        if (error != null) 'error': error,
+      };
 }
 
 /// 子代理服务——委派独立任务
@@ -70,9 +72,21 @@ class SubAgentRunner {
   final ToolRegistry _registry = ToolRegistry();
 
   /// Run a single sub-agent task with isolated context and outer timeout.
-  Future<SubAgentResult> run(SubAgentConfig config) async {
+  Future<SubAgentResult> run(
+    SubAgentConfig config, {
+    ToolContext? parentContext,
+  }) async {
+    final childContext = ToolContext(
+      requestId: parentContext == null
+          ? 'sub_${DateTime.now().microsecondsSinceEpoch}'
+          : '${parentContext.requestId}:sub:${DateTime.now().microsecondsSinceEpoch}',
+      origin: ExecutionOrigin.subAgent,
+      cancellation: parentContext?.cancellation ?? AgentCancellationToken(),
+      conversationId: parentContext?.conversationId,
+      parentTool: 'delegate_task',
+    );
     try {
-      return await _runInternal(config).timeout(
+      return await _runInternal(config, childContext).timeout(
         const Duration(seconds: 120),
         onTimeout: () => SubAgentResult(
           goal: config.goal,
@@ -93,7 +107,10 @@ class SubAgentRunner {
     }
   }
 
-  Future<SubAgentResult> _runInternal(SubAgentConfig config) async {
+  Future<SubAgentResult> _runInternal(
+    SubAgentConfig config,
+    ToolContext childContext,
+  ) async {
     final subRegistry = _buildRegistry(config.toolsets);
 
     final systemPrompt = '''
@@ -118,19 +135,24 @@ ${config.context != null ? '\n背景信息：${config.context}' : ''}
     int iterations = 0;
     final maxIter = config.maxIterations;
 
-    var result = await _api.chatWithTools(
-      systemPrompt: systemPrompt,
-      history: [],
-      userMessage: config.goal,
-      tools: subRegistry.getToolDefs(),
-    ).timeout(const Duration(seconds: 60));
+    var result = await _api
+        .chatWithTools(
+          systemPrompt: systemPrompt,
+          history: [],
+          userMessage: config.goal,
+          tools: subRegistry.getToolDefs(origin: ExecutionOrigin.subAgent),
+        )
+        .timeout(const Duration(seconds: 60));
 
     while (result.toolCalls != null &&
-           result.toolCalls!.isNotEmpty &&
-           iterations < maxIter) {
+        result.toolCalls!.isNotEmpty &&
+        iterations < maxIter) {
       iterations++;
 
-      final executor = ToolExecutor(registry: subRegistry);
+      final executor = ToolExecutor(
+        registry: subRegistry,
+        context: childContext,
+      );
       final toolResults = await executor.execute(result.toolCalls!);
 
       final assistantMsg = Message(
@@ -144,7 +166,9 @@ ${config.context != null ? '\n背景信息：${config.context}' : ''}
       );
       history.add(assistantMsg);
 
-      for (int i = 0; i < result.toolCalls!.length && i < toolResults.length; i++) {
+      for (int i = 0;
+          i < result.toolCalls!.length && i < toolResults.length;
+          i++) {
         final r = toolResults[i];
         history.add(Message(
           content: r['content'] as String,
@@ -178,26 +202,40 @@ ${config.context != null ? '\n背景信息：${config.context}' : ''}
     );
   }
 
-  Future<List<SubAgentResult>> runParallel(List<SubAgentConfig> configs) async {
-    final futures = configs.map((c) => run(c));
+  Future<List<SubAgentResult>> runParallel(
+    List<SubAgentConfig> configs, {
+    ToolContext? parentContext,
+  }) async {
+    final futures = configs.map((c) => run(c, parentContext: parentContext));
     return Future.wait(futures);
   }
 
-  /// Build a tool registry with only the requested toolsets.
-  /// ALWAYS excludes 'delegation' to prevent recursive sub-agent spawning.
+  /// Build a read-only registry from an explicit toolset whitelist.
+  /// Empty/missing toolsets means a text-only sub-agent. Delegation, code,
+  /// dynamic and all modifying tools stay unavailable even in trust mode.
   ToolRegistry _buildRegistry(List<String>? toolsets) {
     final subRegistry = ToolRegistry.isolated();
+    final requested =
+        (toolsets ?? const <String>[]).where(_allowedToolsets.contains).toSet();
+    if (requested.isEmpty) return subRegistry;
     for (final name in _registry.names) {
       final entry = _registry[name];
       if (entry == null) continue;
-      // NEVER allow sub-agents to spawn their own sub-agents
-      if (entry.toolset == 'delegation') continue;
-      if (toolsets == null || toolsets.isEmpty || toolsets.contains(entry.toolset)) {
-        subRegistry.register(entry);
-      }
+      if (!requested.contains(entry.toolset)) continue;
+      if (!entry.effectiveOrigins.contains(ExecutionOrigin.subAgent)) continue;
+      if (entry.effectiveRisk != ToolRisk.read) continue;
+      subRegistry.register(entry);
     }
     return subRegistry;
   }
+
+  static const _allowedToolsets = <String>{
+    'web',
+    'file',
+    'system',
+    'memory',
+    'history',
+  };
 
   String _cleanSummary(String text) {
     var cleaned = text.replaceAll(RegExp(r'[（(]\s*调用\s+\w+[^）)]*[）)]'), '');

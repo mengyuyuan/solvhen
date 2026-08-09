@@ -7,13 +7,16 @@ import 'package:flutter/foundation.dart';
 import 'dart:async';
 import '../tools/tool_registry.dart';
 import '../screens/agent_avatar.dart' show AgentState;
+import '../core/agent/cancellation.dart';
+import '../core/security/tool_security.dart';
 
 class ToolCall {
   final String id;
   final String name;
   final String arguments;
 
-  const ToolCall({required this.id, required this.name, required this.arguments});
+  const ToolCall(
+      {required this.id, required this.name, required this.arguments});
   Map<String, dynamic> get args {
     try {
       return jsonDecode(arguments) as Map<String, dynamic>;
@@ -28,16 +31,25 @@ typedef ToolProgressCallback = void Function(String toolName, String status);
 
 class ToolExecutor {
   final ToolRegistry _registry;
-  final int maxIterations;
   StateCallback? onStateChange;
   ToolProgressCallback? onToolProgress;
+  final ToolContext context;
+  final ToolApprovalCallback? onApproval;
 
   ToolExecutor({
     ToolRegistry? registry,
-    this.maxIterations = 5,
     this.onStateChange,
     this.onToolProgress,
-  }) : _registry = registry ?? ToolRegistry();
+    ToolContext? context,
+    this.onApproval,
+  })  : _registry = registry ?? ToolRegistry(),
+        context = (context ??
+                ToolContext(
+                  requestId: 'tool_${DateTime.now().microsecondsSinceEpoch}',
+                  origin: ExecutionOrigin.localUser,
+                  cancellation: AgentCancellationToken(),
+                ))
+            .withApproval(onApproval);
 
   static List<ToolCall>? parseToolCalls(Map<String, dynamic>? message) {
     if (message == null) return null;
@@ -55,12 +67,18 @@ class ToolExecutor {
 
   // Compiled-once regexes — avoids recompilation on every call.
   // Standard XML. Dart raw strings use single backslashes for regex tokens.
-  static final _invokeRe = RegExp(r'<invoke\s+name="(\w+)"\s*>(.*?)</invoke>', dotAll: true);
-  static final _paramBlockRe = RegExp(r'<parameter\b[^>]*>(.*?)</parameter>', dotAll: true);
+  static final _invokeRe =
+      RegExp(r'<invoke\s+name="(\w+)"\s*>(.*?)</invoke>', dotAll: true);
+  static final _paramBlockRe =
+      RegExp(r'<parameter\b[^>]*>(.*?)</parameter>', dotAll: true);
   static final _nameRe = RegExp(r'name="(\w+)"');
   // DSML: match ANY tag containing "DSML" (bulletproof against format variations)
-  static final _dsmlInvokeRe = RegExp(r'<[^>]*DSML[^>]*invoke\s+name="(\w+)"[^>]*>(.*?)</[^>]*DSML[^>]*invoke[^>]*>', dotAll: true);
-  static final _dsmlParamRe = RegExp(r'<[^>]*DSML[^>]*parameter[^>]*>(.*?)</[^>]*DSML[^>]*parameter[^>]*>', dotAll: true);
+  static final _dsmlInvokeRe = RegExp(
+      r'<[^>]*DSML[^>]*invoke\s+name="(\w+)"[^>]*>(.*?)</[^>]*DSML[^>]*invoke[^>]*>',
+      dotAll: true);
+  static final _dsmlParamRe = RegExp(
+      r'<[^>]*DSML[^>]*parameter[^>]*>(.*?)</[^>]*DSML[^>]*parameter[^>]*>',
+      dotAll: true);
 
   /// DeepSeek sometimes returns tool calls as XML inside content text
   /// instead of in the tool_calls array. Parse them out.
@@ -72,7 +90,10 @@ class ToolExecutor {
     if (matches.isEmpty) {
       matches = _dsmlInvokeRe.allMatches(content);
     }
-    if (kDebugMode) debugPrint('[PARSE-XML] content_len=${content.length} match_count=${matches.length}');
+    if (kDebugMode) {
+      debugPrint(
+          '[PARSE-XML] content_len=${content.length} match_count=${matches.length}');
+    }
     if (matches.isEmpty) return null;
 
     final calls = <ToolCall>[];
@@ -108,13 +129,18 @@ class ToolExecutor {
 
   // Compiled-once display cleaning regexes. DSML stripping runs before generic
   // tags so malformed DeepSeek DSML blocks cannot leak into UI/DB display paths.
-  static final _sDsmlBlockAny = RegExp(r'<[^>]*DSML[^>]*>.*?</[^>]*DSML[^>]*>', dotAll: true);
+  static final _sDsmlBlockAny =
+      RegExp(r'<[^>]*DSML[^>]*>.*?</[^>]*DSML[^>]*>', dotAll: true);
   static final _sDsmlAny = RegExp(r'<[^>]*DSML[^>]*>', dotAll: true);
-  static final _sInvokeRe = RegExp(r'<invoke\b[^>]*>.*?</invoke>', dotAll: true);
-  static final _sParamRe = RegExp(r'<parameter\b[^>]*>.*?</parameter>', dotAll: true);
-  static final _sTagRe = RegExp(r'</?(?:invoke|parameter|tool_calls)\b[^>]*>', dotAll: true);
+  static final _sInvokeRe =
+      RegExp(r'<invoke\b[^>]*>.*?</invoke>', dotAll: true);
+  static final _sParamRe =
+      RegExp(r'<parameter\b[^>]*>.*?</parameter>', dotAll: true);
+  static final _sTagRe =
+      RegExp(r'</?(?:invoke|parameter|tool_calls)\b[^>]*>', dotAll: true);
   static final _sCallCnRe = RegExp(r'[（(]\s*调用[\s\S]*?[）)]');
-  static final _sCallEnRe = RegExp(r"(?:I(?:'ll|'m|'ve|\s+(?:will|can|should|must))\s+)?(?:call(?:ing|ed)?|invok(?:ing|ed)?|us(?:ing|ed)|let\s+me\s+call)\s+(?:the\s+)?\w+\s*(?:tool|function)?[.!，。]?");
+  static final _sCallEnRe = RegExp(
+      r"(?:I(?:'ll|'m|'ve|\s+(?:will|can|should|must))\s+)?(?:call(?:ing|ed)?|invok(?:ing|ed)?|us(?:ing|ed)|let\s+me\s+call)\s+(?:the\s+)?\w+\s*(?:tool|function)?[.!，。]?");
   static final _sHtmlRe = RegExp(r'```html?\s*\n[\s\S]*?```', dotAll: true);
   static final _sCssRe = RegExp(r'```css\s*\n[\s\S]*?```', dotAll: true);
   static final _sBlankRe = RegExp(r'\n{3,}');
@@ -159,6 +185,7 @@ class ToolExecutor {
   /// CRITICAL: results must be in the SAME order as input calls (caller matches by index).
   Future<List<Map<String, dynamic>>> execute(List<ToolCall> calls) async {
     if (calls.isEmpty) return [];
+    context.cancellation.throwIfCancelled();
 
     // Build a map: index → result. Execute parallel-safe calls concurrently,
     // then fill in sequential calls in order.
@@ -195,15 +222,27 @@ class ToolExecutor {
 
   bool _canParallel(String name) {
     const parallelSafe = {
-      'web_search', 'web_extract', 'fetch_url', 'get_time', 'get_battery',
-      'get_volume', 'get_brightness', 'get_device_info', 'get_clipboard',
-      'search_history', 'search_memory', 'list_memories', 'list_files',
-      'read_file', 'list_installed_apps',
+      'web_search',
+      'web_extract',
+      'fetch_url',
+      'get_time',
+      'get_battery',
+      'get_volume',
+      'get_brightness',
+      'get_device_info',
+      'get_clipboard',
+      'search_history',
+      'search_memory',
+      'list_memories',
+      'list_files',
+      'read_file',
+      'list_installed_apps',
     };
     return parallelSafe.contains(name);
   }
 
   Future<Map<String, dynamic>> _executeOne(ToolCall call) async {
+    context.cancellation.throwIfCancelled();
     onToolProgress?.call(call.name, 'running');
 
     try {
@@ -212,16 +251,32 @@ class ToolExecutor {
       final String result;
       if (call.name == 'delegate_task') {
         // Sub-agents have their own 120s timeout — don't double-wrap.
-        result = await _registry.dispatch(call.name, call.args);
-      } else if (const {'web_search', 'web_extract', 'fetch_url'}.contains(call.name)) {
+        result = await _registry.dispatch(
+          call.name,
+          call.args,
+          context: context,
+          onApproval: onApproval,
+        );
+      } else if (const {'web_search', 'web_extract', 'fetch_url'}
+          .contains(call.name)) {
         // Web operations can be slow (network latency, large pages).
         result = await _withTimeout(
-          () => _registry.dispatch(call.name, call.args),
+          () => _registry.dispatch(
+            call.name,
+            call.args,
+            context: context,
+            onApproval: onApproval,
+          ),
           const Duration(seconds: 60),
         );
       } else {
         result = await _withTimeout(
-          () => _registry.dispatch(call.name, call.args),
+          () => _registry.dispatch(
+            call.name,
+            call.args,
+            context: context,
+            onApproval: onApproval,
+          ),
           const Duration(seconds: 25),
         );
       }
@@ -244,7 +299,8 @@ class ToolExecutor {
     }
   }
 
-  Future<String> _withTimeout(Future<String> Function() fn, Duration timeout) async {
+  Future<String> _withTimeout(
+      Future<String> Function() fn, Duration timeout) async {
     return fn().timeout(timeout, onTimeout: () {
       throw TimeoutException('工具调用超时');
     });
@@ -255,8 +311,10 @@ class ToolExecutor {
     try {
       final parsed = jsonDecode(result);
       if (parsed is Map) {
-        if (parsed['content'] is String && (parsed['content'] as String).length > maxLen) {
-          parsed['content'] = '${(parsed['content'] as String).substring(0, maxLen)}…[truncated]';
+        if (parsed['content'] is String &&
+            (parsed['content'] as String).length > maxLen) {
+          parsed['content'] =
+              '${(parsed['content'] as String).substring(0, maxLen)}…[truncated]';
           parsed['_truncated'] = true;
         }
         if (parsed['results'] is List) {

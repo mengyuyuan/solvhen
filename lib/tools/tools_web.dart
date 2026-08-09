@@ -45,9 +45,12 @@ void registerWebTools() {
       // 三个搜索引擎并行请求，不互相阻塞
       // Google 在国内被屏蔽且无代理时不可用，已禁用
       final engines = [
-        _SearchEngine('Bing', 'https://www.bing.com/search?q=$query', _extractBingResults),
-        _SearchEngine('百度', 'https://www.baidu.com/s?wd=$query', _extractBaiduResults),
-        _SearchEngine('搜狗', 'https://www.sogou.com/web?query=$query', _extractSogouResults),
+        _SearchEngine('Bing', 'https://www.bing.com/search?q=$query',
+            _extractBingResults),
+        _SearchEngine(
+            '百度', 'https://www.baidu.com/s?wd=$query', _extractBaiduResults),
+        _SearchEngine('搜狗', 'https://www.sogou.com/web?query=$query',
+            _extractSogouResults),
       ];
 
       // 并行触发所有搜索引擎，Future.wait 等待全部完成（或失败）
@@ -58,9 +61,11 @@ void registerWebTools() {
       for (final r in results) {
         if (kDebugMode) {
           if (r.error != null) {
-            debugPrint('[Solvhen:web] ${r.engine} ERROR: ${r.error!.substring(0, r.error!.length > 300 ? 300 : r.error!.length)}');
+            debugPrint(
+                '[Solvhen:web] ${r.engine} ERROR: ${r.error!.substring(0, r.error!.length > 300 ? 300 : r.error!.length)}');
           } else {
-            debugPrint('[Solvhen:web] ${r.engine}: ${r.results?.length ?? 0} results');
+            debugPrint(
+                '[Solvhen:web] ${r.engine}: ${r.results?.length ?? 0} results');
           }
         }
       }
@@ -80,12 +85,16 @@ void registerWebTools() {
         return jsonEncode({
           'success': true,
           'query': rawQuery,
-          'engines': results.where((r) => r.results != null && r.results!.isNotEmpty).map((r) => r.engine).toList(),
+          'engines': results
+              .where((r) => r.results != null && r.results!.isNotEmpty)
+              .map((r) => r.engine)
+              .toList(),
           'results': allResults,
           'count': allResults.length,
         });
       }
-      return jsonEncode({'success': false, 'error': '所有搜索引擎均失败', 'details': errors});
+      return jsonEncode(
+          {'success': false, 'error': '所有搜索引擎均失败', 'details': errors});
     },
   ));
 
@@ -113,13 +122,22 @@ void registerWebTools() {
         'required': ['name', 'content'],
       },
     },
-    handler: (args) async {
+    handler: (args) async => jsonEncode({
+      'success': false,
+      'error': 'Tool context required',
+    }),
+    contextualHandler: (args, context) async {
       try {
-        // 委托给 write_file 工具——避免代码重复，利用已有的文件系统工具
-        return await registry.dispatch('write_file', {
-          'path': 'skills/${args['name']}.md',
-          'content': args['content'],
-        });
+        // Nested calls retain their original origin/cancellation/approval and
+        // are evaluated again by ToolPolicyEngine at the dispatch boundary.
+        return await registry.dispatch(
+            'write_file',
+            {
+              'path': 'skills/${args['name']}.md',
+              'content': args['content'],
+            },
+            context: context.nested('save_skill'),
+            onApproval: context.approval);
       } catch (e) {
         return jsonEncode({'success': false, 'error': e.toString()});
       }
@@ -230,13 +248,16 @@ Future<_SearchResult> _searchOne(_SearchEngine engine, Dio dio) async {
     // 诊断：解析无结果时附带 HTML 片段用于调试
     if (results.isEmpty) {
       final snippet = html.length > 500 ? '${html.substring(0, 500)}…' : html;
-      return _SearchResult(engine: engine.name, results: results, error: '解析无结果。HTML: $snippet');
+      return _SearchResult(
+          engine: engine.name, results: results, error: '解析无结果。HTML: $snippet');
     }
     return _SearchResult(engine: engine.name, results: results);
   } catch (e) {
     return _SearchResult(
       engine: engine.name,
-      error: e.toString().length > 80 ? '${e.toString().substring(0, 80)}…' : e.toString(),
+      error: e.toString().length > 80
+          ? '${e.toString().substring(0, 80)}…'
+          : e.toString(),
     );
   }
 }
@@ -254,9 +275,12 @@ List<Map<String, String>> _extractBingResults(String html) {
   for (final b in blocks.take(10)) {
     final block = b.group(1)!;
     // 标题和链接：<h2><a href="...">Title</a></h2>
-    final titleMatch = RegExp(r'<h2[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>([^<]*)<', dotAll: true).firstMatch(block);
+    final titleMatch =
+        RegExp(r'<h2[^>]*>.*?<a[^>]*href="([^"]*)"[^>]*>([^<]*)<', dotAll: true)
+            .firstMatch(block);
     // 摘要：<p> 标签内容（10-300字符，过滤太短的）
-    final snippetMatch = RegExp(r'<p[^>]*>([^<]{10,300})', dotAll: true).firstMatch(block);
+    final snippetMatch =
+        RegExp(r'<p[^>]*>([^<]{10,300})', dotAll: true).firstMatch(block);
 
     if (titleMatch != null) {
       results.add({
@@ -290,12 +314,21 @@ List<Map<String, String>> _extractBingResults(String html) {
 List<Map<String, String>> _extractBaiduResults(String html) {
   final results = <Map<String, String>>[];
   // 百度结果块：<div class="result c-container" ...>
-  final blockRe = RegExp(r'<div[^>]*class="[^"]*result[^"]*c-container[^"]*"[^>]*>(.*?)</div>\s*</div>', dotAll: true);
+  final blockRe = RegExp(
+      r'<div[^>]*class="[^"]*result[^"]*c-container[^"]*"[^>]*>(.*?)</div>\s*</div>',
+      dotAll: true);
   for (final b in blockRe.allMatches(html).take(10)) {
     final block = b.group(1)!;
-    final titleMatch = RegExp(r'<a[^>]*href="([^"]*)"[^>]*>(.+?)</a>', dotAll: true).firstMatch(block);
-    final snippetMatch = RegExp(r'<span[^>]*class="[^"]*content-right_[^"]*"[^>]*>(.*?)</span>', dotAll: true).firstMatch(block)
-        ?? RegExp(r'<div[^>]*class="[^"]*c-abstract[^"]*"[^>]*>(.*?)</div>', dotAll: true).firstMatch(block);
+    final titleMatch =
+        RegExp(r'<a[^>]*href="([^"]*)"[^>]*>(.+?)</a>', dotAll: true)
+            .firstMatch(block);
+    final snippetMatch = RegExp(
+                r'<span[^>]*class="[^"]*content-right_[^"]*"[^>]*>(.*?)</span>',
+                dotAll: true)
+            .firstMatch(block) ??
+        RegExp(r'<div[^>]*class="[^"]*c-abstract[^"]*"[^>]*>(.*?)</div>',
+                dotAll: true)
+            .firstMatch(block);
     if (titleMatch != null) {
       results.add({
         'title': _stripTags(titleMatch.group(2) ?? ''),
@@ -311,12 +344,21 @@ List<Map<String, String>> _extractBaiduResults(String html) {
 List<Map<String, String>> _extractSogouResults(String html) {
   final results = <Map<String, String>>[];
   // 搜狗结果块：<div class="vrwrap"> 或 <div class="rb">
-  final blockRe = RegExp(r'<div[^>]*class="(?:vrwrap|rb)"[^>]*>(.*?)</div>\s*</div>\s*</div>', dotAll: true);
+  final blockRe = RegExp(
+      r'<div[^>]*class="(?:vrwrap|rb)"[^>]*>(.*?)</div>\s*</div>\s*</div>',
+      dotAll: true);
   for (final b in blockRe.allMatches(html).take(10)) {
     final block = b.group(1)!;
-    final titleMatch = RegExp(r'<a[^>]*href="([^"]*)"[^>]*>(.+?)</a>', dotAll: true).firstMatch(block);
-    final snippetMatch = RegExp(r'<p[^>]*class="[^"]*(?:star-wiki|str_info|str-text)[^"]*"[^>]*>(.*?)</p>', dotAll: true).firstMatch(block)
-        ?? RegExp(r'<div[^>]*class="[^"]*(?:space|ft|abstract)[^"]*"[^>]*>(.*?)</div>', dotAll: true).firstMatch(block);
+    final titleMatch =
+        RegExp(r'<a[^>]*href="([^"]*)"[^>]*>(.+?)</a>', dotAll: true)
+            .firstMatch(block);
+    final snippetMatch = RegExp(
+                r'<p[^>]*class="[^"]*(?:star-wiki|str_info|str-text)[^"]*"[^>]*>(.*?)</p>',
+                dotAll: true)
+            .firstMatch(block) ??
+        RegExp(r'<div[^>]*class="[^"]*(?:space|ft|abstract)[^"]*"[^>]*>(.*?)</div>',
+                dotAll: true)
+            .firstMatch(block);
     if (titleMatch != null) {
       results.add({
         'title': _stripTags(titleMatch.group(2) ?? ''),
@@ -330,9 +372,11 @@ List<Map<String, String>> _extractSogouResults(String html) {
 
 /// 去除字符串中的 HTML 标签并压缩空白。
 String _stripTags(String html) {
-  return html.replaceAll(RegExp(r'<[^>]*>'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
+  return html
+      .replaceAll(RegExp(r'<[^>]*>'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
 }
-
 
 /// 判断 172.x.x.x 中的 x 是否属于私有范围（16-31）。
 /// 私有 172.16.0.0/12 范围: 172.16.0.0 – 172.31.255.255

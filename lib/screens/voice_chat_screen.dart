@@ -5,7 +5,6 @@
 
 library;
 
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,7 +41,8 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
   void initState() {
     super.initState();
     _pulseCtrl = AnimationController(
-      vsync: this, duration: const Duration(milliseconds: 1200),
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
     )..repeat(reverse: true);
     _init();
   }
@@ -61,7 +61,11 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
 
   void _startListening() {
     if (_recording || _processing || !_sttReady) return;
-    setState(() { _recording = true; _transcript = ''; _reply = ''; });
+    setState(() {
+      _recording = true;
+      _transcript = '';
+      _reply = '';
+    });
 
     _stt.listen(
       onResult: (r) {
@@ -75,8 +79,10 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
           }
         });
       },
-      listenMode: stt.ListenMode.dictation,
-      localeId: 'zh_CN',
+      listenOptions: stt.SpeechListenOptions(
+        listenMode: stt.ListenMode.dictation,
+        localeId: 'zh_CN',
+      ),
     );
   }
 
@@ -98,18 +104,29 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
       final s = ref.read(chatProvider);
       final registry = ToolRegistry();
       final prompt = await PromptBuilder.build(
-        s.messages, text, toolNames: registry.names, conversationId: s.conversationId,
+        s.messages,
+        text,
+        toolNames: registry.names,
+        conversationId: s.conversationId,
       );
       final api = ApiService();
-      final result = await api.chatStream(
-        systemPrompt: prompt, history: s.messages, userMessage: text,
-      ).timeout(const Duration(seconds: 30));
+      final result = await api
+          .chatStream(
+            systemPrompt: prompt,
+            history: s.messages,
+            userMessage: text,
+          )
+          .timeout(const Duration(seconds: 30));
       final reply = result.content.isNotEmpty ? result.content : '嗯，我在。';
-      setState(() { _reply = reply; _processing = false; });
+      setState(() {
+        _reply = reply;
+        _processing = false;
+      });
       await _voice.speak(reply);
     } catch (e) {
       setState(() {
-        _reply = '抱歉，出了点问题: $e'; _processing = false;
+        _reply = '抱歉，出了点问题: $e';
+        _processing = false;
       });
     }
   }
@@ -123,18 +140,27 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
     return Scaffold(
       backgroundColor: c.bgRoot,
       appBar: AppBar(
-        backgroundColor: Colors.transparent, elevation: 0,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         leading: IconButton(
           icon: Icon(Icons.close, color: c.textSecondary),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('语音对话', style: TextStyle(color: c.textPrimary, fontSize: 16)),
+        title:
+            Text('语音对话', style: TextStyle(color: c.textPrimary, fontSize: 16)),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text('自动', style: TextStyle(fontSize: 12, color: _autoMode ? c.accent : c.textTertiary)),
-              Switch(value: _autoMode, onChanged: (v) => setState(() => _autoMode = v), activeColor: c.accent),
+              Text('自动',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _autoMode ? c.accent : c.textTertiary)),
+              Switch(
+                value: _autoMode,
+                onChanged: (v) => setState(() => _autoMode = v),
+                activeThumbColor: c.accent,
+              ),
             ]),
           ),
         ],
@@ -150,7 +176,11 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
                 scale: scale,
                 child: AgentAvatar(
                   size: 100,
-                  state: _processing ? AgentState.thinking : _recording ? AgentState.speaking : AgentState.idle,
+                  state: _processing
+                      ? AgentState.thinking
+                      : _recording
+                          ? AgentState.speaking
+                          : AgentState.idle,
                 ),
               );
             },
@@ -168,8 +198,11 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 24),
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: c.bgCardSolid, borderRadius: BorderRadius.circular(16)),
-              child: Text(_transcript, style: TextStyle(fontSize: 18, color: c.textPrimary)),
+              decoration: BoxDecoration(
+                  color: c.bgCardSolid,
+                  borderRadius: BorderRadius.circular(16)),
+              child: Text(_transcript,
+                  style: TextStyle(fontSize: 18, color: c.textPrimary)),
             ),
           if (_reply.isNotEmpty)
             Container(
@@ -180,7 +213,8 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: c.accent.withValues(alpha: 0.2)),
               ),
-              child: Text(_reply, style: TextStyle(fontSize: 16, color: c.textPrimary)),
+              child: Text(_reply,
+                  style: TextStyle(fontSize: 16, color: c.textPrimary)),
             ),
           const Spacer(),
           if (!_autoMode)
@@ -192,13 +226,18 @@ class _VoiceChatScreenState extends ConsumerState<VoiceChatScreen>
                 onLongPressCancel: _stopListening,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  width: 80, height: 80,
+                  width: 80,
+                  height: 80,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: _recording ? c.danger.withValues(alpha: 0.3) : c.accent.withValues(alpha: 0.15),
-                    border: Border.all(color: _recording ? c.danger : c.accent, width: 3),
+                    color: _recording
+                        ? c.danger.withValues(alpha: 0.3)
+                        : c.accent.withValues(alpha: 0.15),
+                    border: Border.all(
+                        color: _recording ? c.danger : c.accent, width: 3),
                   ),
-                  child: Icon(Icons.mic, size: 36, color: _recording ? c.danger : c.accent),
+                  child: Icon(Icons.mic,
+                      size: 36, color: _recording ? c.danger : c.accent),
                 ),
               ),
             ),

@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PackageInfo
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
@@ -19,12 +20,21 @@ import android.net.Uri
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.RenderMode
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
+import java.io.File
+import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "solvhen/system"
+
+    // MIUI may briefly detach/recreate a SurfaceView when adjustResize opens
+    // the IME, especially while another app owns a video/PiP surface. Rendering
+    // Flutter into the window texture avoids the stale black BLAST surface and
+    // also composes predictably with the short-lived WebView tool canvas.
+    override fun getRenderMode(): RenderMode = RenderMode.texture
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -67,6 +77,10 @@ class MainActivity : FlutterActivity() {
                         val mode = call.argument<String>("mode") ?: "normal"
                         setRingerMode(mode)
                         result.success(mapOf("mode" to mode))
+                    }
+                    "verifyApkIdentity" -> {
+                        val filePath = call.argument<String>("filePath") ?: ""
+                        result.success(verifyApkIdentity(filePath))
                     }
                     "getClipboard" -> result.success(getClipboard())
                     "setClipboard" -> {
@@ -248,6 +262,50 @@ class MainActivity : FlutterActivity() {
             "androidVersion" to Build.VERSION.RELEASE,
             "sdk" to Build.VERSION.SDK_INT
         )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun certificateSha256(info: PackageInfo): String? {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.signingInfo?.apkContentsSigners
+        } else {
+            info.signatures
+        }
+        val certificate = signatures?.firstOrNull() ?: return null
+        return MessageDigest.getInstance("SHA-256")
+            .digest(certificate.toByteArray())
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun verifyApkIdentity(filePath: String): Map<String, Any> {
+        return try {
+            val apk = File(filePath).canonicalFile
+            if (!apk.isFile) return mapOf("error" to "APK file not found")
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                PackageManager.GET_SIGNATURES
+            }
+            val archiveInfo = packageManager.getPackageArchiveInfo(apk.path, flags)
+                ?: return mapOf("error" to "Unable to parse APK")
+            val archiveCertificate = certificateSha256(archiveInfo)
+                ?: return mapOf("error" to "APK signing certificate missing")
+            val installedInfo = packageManager.getPackageInfo(packageName, flags)
+            val installedCertificate = certificateSha256(installedInfo)
+                ?: return mapOf("error" to "Installed signing certificate missing")
+            mapOf(
+                "packageName" to archiveInfo.packageName,
+                "archiveCertificateSha256" to archiveCertificate,
+                "installedCertificateSha256" to installedCertificate,
+                "matchesInstalledCertificate" to archiveCertificate.equals(
+                    installedCertificate,
+                    ignoreCase = true,
+                ),
+            )
+        } catch (e: Exception) {
+            mapOf("error" to (e.message ?: e.javaClass.simpleName))
+        }
     }
 
     private fun getVolume(): Map<String, Any> {

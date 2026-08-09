@@ -1,7 +1,6 @@
 // ═══════════════════════════════════════════════════════════════
 // Solvhen — AI手机智能体 | 世于我愿
-// 主动消息服务 — Dart Timer + 前台通知
-// 全部在主 isolate 运行，人格/记忆/通知完整可用
+// 主动消息服务 — 前台 Timer / WorkManager / 显式前台服务
 // ═══════════════════════════════════════════════════════════════
 
 library;
@@ -10,55 +9,186 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:flutter/widgets.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:workmanager/workmanager.dart';
 import 'api_service.dart';
 import 'database_service.dart';
 import 'tool_executor.dart';
 import '../services/notification_service.dart';
 
-const _keeperId = 999;
+const _periodicUniqueName = 'solvhen.proactive.periodic';
+const _periodicTaskName = 'solvhen.proactive.tick';
+const _foregroundServiceId = 991;
+bool _schedulerInitialized = false;
+bool _appInForeground = true;
+
+enum ProactiveScheduleMode { foregroundTimer, workManager, foregroundService }
+
+String proactiveScheduleModeLabel(int intervalMinutes) {
+  if (intervalMinutes < 15) return '前台服务';
+  return _appInForeground ? '前台 Timer + WorkManager' : 'WorkManager';
+}
+
+@pragma('vm:entry-point')
+void proactiveWorkmanagerDispatcher() {
+  WidgetsFlutterBinding.ensureInitialized();
+  Workmanager().executeTask((taskName, inputData) async {
+    if (taskName != _periodicTaskName) return true;
+    return runProactiveTick(source: 'workmanager');
+  });
+}
+
+@pragma('vm:entry-point')
+void proactiveForegroundCallback() {
+  FlutterForegroundTask.setTaskHandler(_ProactiveForegroundTaskHandler());
+}
+
+class _ProactiveForegroundTaskHandler extends TaskHandler {
+  @override
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {}
+
+  @override
+  void onRepeatEvent(DateTime timestamp) {
+    unawaited(runProactiveTick(source: 'foreground_service'));
+  }
+
+  @override
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+}
+
+Future<void> initializeProactiveScheduling() async {
+  if (_schedulerInitialized ||
+      kIsWeb ||
+      defaultTargetPlatform != TargetPlatform.android) {
+    return;
+  }
+  FlutterForegroundTask.initCommunicationPort();
+  await Workmanager().initialize(proactiveWorkmanagerDispatcher);
+  _schedulerInitialized = true;
+}
 
 /// 启动主动消息
-Future<void> startProactive({required int intervalMinutes}) async {
+Future<void> startProactive({
+  required int intervalMinutes,
+  bool sendImmediately = true,
+}) async {
   final clamped = intervalMinutes.clamp(1, 1440);
 
   await DB.setConfig('proactive_enabled', 'true');
   await DB.setConfig('proactive_interval', clamped.toString());
 
-  // 工具/设置页都可能调用这里；确保通知服务已初始化，否则 show() 会静默跳过。
-  await NotificationService().init();
-
-  // 前台通知 — 保持进程活跃
-  await NotificationService().cancel(_keeperId);
-  await NotificationService().show(
-    id: _keeperId,
-    title: 'Solvhen',
-    body: '主动消息运行中（每${clamped}分钟）',
-    payload: 'proactive_keeper',
-    ongoing: true,
-  );
-
-  // 保持 CPU 唤醒 — Timer 才不会停
-  await WakelockPlus.enable();
-
-  _scheduleTick(clamped);
-  // 首次 tick 立即执行；用户刚开启时通常 last_activity_at 很近，不能因此误判为“不发”。
-  await _tick(ignoreRecentActivity: true);
-  debugPrint('[Proactive] started, interval: ${clamped}min');
+  try {
+    await initializeProactiveScheduling();
+    await NotificationService().init();
+    await _configureSchedule(clamped);
+  } catch (_) {
+    await DB.setConfig('proactive_enabled', 'false');
+    await DB.setConfig('proactive_schedule_mode', 'failed');
+    rethrow;
+  }
+  if (sendImmediately) {
+    await runProactiveTick(
+      ignoreRecentActivity: true,
+      ignoreIntervalGuard: true,
+      source: 'manual_enable',
+    );
+  }
+  debugPrint(
+      '[Proactive] started: $clamped min / ${proactiveScheduleModeLabel(clamped)}');
 }
 
 /// 停止
 Future<void> stopProactive() async {
   await DB.setConfig('proactive_enabled', 'false');
   _cancelTimer();
-  await NotificationService().cancel(_keeperId);
-  await WakelockPlus.disable();
+  if (_schedulerInitialized) {
+    await Workmanager().cancelByUniqueName(_periodicUniqueName);
+  }
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    await FlutterForegroundTask.stopService();
+  }
+  await DB.setConfig('proactive_schedule_mode', 'disabled');
   debugPrint('[Proactive] stopped');
 }
 
 Future<bool> isProactiveRunning() async {
   final cfg = await DB.getConfig();
   return cfg['proactive_enabled'] == 'true';
+}
+
+Future<void> setProactiveAppForeground(bool value) async {
+  _appInForeground = value;
+  if (!value) {
+    _cancelTimer();
+    return;
+  }
+  final config = await DB.getConfig();
+  if (config['proactive_enabled'] != 'true') return;
+  final minutes =
+      (int.tryParse(config['proactive_interval'] ?? '30') ?? 30).clamp(1, 1440);
+  if (minutes >= 15) _scheduleTick(minutes);
+}
+
+Future<void> _configureSchedule(int minutes) async {
+  _cancelTimer();
+  final isAndroid = !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  if (!isAndroid) {
+    if (_appInForeground) _scheduleTick(minutes);
+    await DB.setConfig('proactive_schedule_mode', 'foreground_timer');
+    return;
+  }
+  if (_schedulerInitialized) {
+    await Workmanager().cancelByUniqueName(_periodicUniqueName);
+  }
+  await FlutterForegroundTask.stopService();
+
+  if (minutes < 15) {
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'solvhen_proactive_foreground',
+        channelName: 'Solvhen 高频主动消息',
+        channelDescription: '1–14 分钟主动消息使用的常驻前台服务',
+        onlyAlertOnce: true,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: false,
+        playSound: false,
+      ),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(minutes * 60 * 1000),
+        autoRunOnBoot: false,
+        autoRunOnMyPackageReplaced: false,
+        allowWakeLock: true,
+        allowWifiLock: false,
+        allowAutoRestart: true,
+        stopWithTask: false,
+      ),
+    );
+    final result = await FlutterForegroundTask.startService(
+      serviceId: _foregroundServiceId,
+      serviceTypes: const [ForegroundServiceTypes.specialUse],
+      notificationTitle: 'Solvhen 主动消息运行中',
+      notificationText: '高频模式 · 每 $minutes 分钟 · 点击返回应用',
+      callback: proactiveForegroundCallback,
+    );
+    if (result is ServiceRequestFailure) {
+      throw StateError('foreground_service_start_failed');
+    }
+    await DB.setConfig('proactive_schedule_mode', 'foreground_service');
+    return;
+  }
+
+  await Workmanager().registerPeriodicTask(
+    _periodicUniqueName,
+    _periodicTaskName,
+    frequency: Duration(minutes: minutes),
+    initialDelay: Duration(minutes: minutes),
+    constraints: Constraints(networkType: NetworkType.connected),
+    existingWorkPolicy: ExistingPeriodicWorkPolicy.update,
+  );
+  await DB.setConfig('proactive_schedule_mode', 'workmanager');
+  if (_appInForeground) _scheduleTick(minutes);
 }
 
 // ═══════════════════════════════════════
@@ -81,7 +211,7 @@ void _scheduleTick(int minutes) {
   _timer = Timer(Duration(minutes: minutes), () async {
     try {
       debugPrint('[Proactive] timer fired');
-      await _tick();
+      await runProactiveTick(source: 'foreground_timer');
     } catch (e) {
       debugPrint('[Proactive] timer callback error: $e');
     }
@@ -89,10 +219,11 @@ void _scheduleTick(int minutes) {
     try {
       final cfg = await DB.getConfig();
       final m = int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30;
-      _scheduleTick(m.clamp(1, 1440));
+      if (_appInForeground && cfg['proactive_enabled'] == 'true' && m >= 15) {
+        _scheduleTick(m.clamp(15, 1440));
+      }
     } catch (e) {
-      debugPrint('[Proactive] re-schedule error, using default 30min: $e');
-      _scheduleTick(30);
+      debugPrint('[Proactive] re-schedule error: ${e.runtimeType}');
     }
   });
 }
@@ -106,18 +237,39 @@ void _cancelTimer() {
 // Tick
 // ═══════════════════════════════════════
 
-Future<void> _tick({bool ignoreRecentActivity = false}) async {
-  if (_ticking) return;
+Future<bool> runProactiveTick({
+  bool ignoreRecentActivity = false,
+  bool ignoreIntervalGuard = false,
+  String source = 'unknown',
+}) async {
+  if (_ticking) return true;
   _ticking = true;
   try {
+    await NotificationService().init();
     final now = DateTime.now();
     _lastTickAt = now;
     await DB.setConfig('last_proactive_tick', now.toIso8601String());
+    await DB.setConfig('last_proactive_source', source);
 
     final cfg = await DB.getConfig();
     if (cfg['proactive_enabled'] != 'true') {
       debugPrint('[Proactive] disabled, skipping');
-      return;
+      return true;
+    }
+
+    // WorkManager, the foreground Timer and a foreground-service isolate may
+    // wake close together. The atomic claim prevents duplicate messages across
+    // isolates/process restarts and is intentionally not replayed after a crash.
+    final interval =
+        (int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30).clamp(1, 1440);
+    final claimed = await DB.tryClaimProactiveTick(
+      now: now,
+      intervalMinutes: interval,
+      force: ignoreIntervalGuard,
+    );
+    if (!claimed) {
+      debugPrint('[Proactive] skipped — interval already claimed');
+      return true;
     }
 
     // 冲突检测：用户 2 分钟内有活动则跳过
@@ -126,7 +278,7 @@ Future<void> _tick({bool ignoreRecentActivity = false}) async {
       final lastTime = DateTime.tryParse(lastActivity);
       if (lastTime != null && now.difference(lastTime).inMinutes < 2) {
         debugPrint('[Proactive] skipped — user active recently');
-        return;
+        return true;
       }
     }
 
@@ -150,11 +302,13 @@ $chatText
 
 请用你的人格说一句自然的话联系对方。控制在20字以内。不要解释，不要提主动消息、定时器或工具。''';
 
-    final result = await api.chatStream(
-      systemPrompt: prompt,
-      history: const [],
-      userMessage: '（后台定时联系，请简短回复）',
-    ).timeout(const Duration(seconds: 20));
+    final result = await api
+        .chatStream(
+          systemPrompt: prompt,
+          history: const [],
+          userMessage: '（后台定时联系，请简短回复）',
+        )
+        .timeout(const Duration(seconds: 20));
 
     var text = ToolExecutor.stripToolCallsFromContent(result.content).trim();
     if (text.isEmpty || text == '[SKIP]') {
@@ -163,6 +317,7 @@ $chatText
 
     final convId = await _getActiveConvId();
     await _saveMessage(convId, text);
+    await DB.setConfig('last_proactive_sent_at', now.toIso8601String());
 
     await NotificationService().show(
       title: 'Solvhen',
@@ -173,10 +328,15 @@ $chatText
     _lastError = null;
     await DB.setConfig('last_proactive_error', '');
     debugPrint('[Proactive] sent: $text -> conv $convId');
+    return true;
   } catch (e) {
-    _lastError = '$e';
-    await DB.setConfig('last_proactive_error', '$e');
-    debugPrint('[Proactive] tick error: $e');
+    final errorCode = e.runtimeType.toString();
+    _lastError = errorCode;
+    try {
+      await DB.setConfig('last_proactive_error', errorCode);
+    } catch (_) {}
+    debugPrint('[Proactive] tick error: $errorCode');
+    return false;
   } finally {
     _ticking = false;
   }

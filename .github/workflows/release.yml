@@ -1,0 +1,83 @@
+name: Signed Android Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      SOLVHEN_OTA_PRIVATE_KEY: ${{ secrets.SOLVHEN_OTA_PRIVATE_KEY }}
+      SOLVHEN_OTA_PUBLIC_KEY: ${{ secrets.SOLVHEN_OTA_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Validate release secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_STORE_PASSWORD"
+          test -n "$ANDROID_KEY_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$SOLVHEN_OTA_PRIVATE_KEY"
+          test -n "$SOLVHEN_OTA_PUBLIC_KEY"
+      - name: Configure Android signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release.jks
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=app/release.jks\n' \
+            "$ANDROID_STORE_PASSWORD" "$ANDROID_KEY_PASSWORD" "$ANDROID_KEY_ALIAS" \
+            > android/key.properties
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: python -m unittest tool/test_rebuild_server.py
+      - name: Build signed APK with pinned OTA public key
+        run: flutter build apk --release --dart-define=SOLVHEN_OTA_PUBLIC_KEY="$SOLVHEN_OTA_PUBLIC_KEY"
+      - name: Generate checksum and signed update manifest
+        shell: bash
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          TAG="${GITHUB_REF_NAME#v}"
+          CODE="$(sed -n 's/^version: .*[+]//p' pubspec.yaml)"
+          CERT="$($ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner verify --print-certs "$APK" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)"
+          test -n "$CERT"
+          dart run tool/generate_update_manifest.dart \
+            --apk="$APK" \
+            --version="$TAG" \
+            --version-code="$CODE" \
+            --url="https://ota.sywy.app/releases/$GITHUB_REF_NAME/solvhen-$GITHUB_REF_NAME.apk" \
+            --certificate-sha256="$CERT" \
+            --changelog="Solvhen $GITHUB_REF_NAME" \
+            --output=build/release/latest.json
+          cp "$APK" "build/release/solvhen-$GITHUB_REF_NAME.apk"
+          sha256sum "build/release/solvhen-$GITHUB_REF_NAME.apk" > build/release/SHA256SUMS.txt
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            build/release/solvhen-$GITHUB_REF_NAME.apk \
+            build/release/latest.json \
+            build/release/SHA256SUMS.txt \
+            --verify-tag \
+            --generate-notes

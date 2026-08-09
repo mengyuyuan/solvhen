@@ -1,7 +1,7 @@
 name: solvhen
 description: Solvhen - A growing presence
 publish_to: 'none'
-version: 2.2.0+4
+version: 2.2.1+5
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
@@ -25,15 +25,29 @@ dependencies:
   record: ^5.0.0
   audioplayers: ^6.0.0
   open_filex: ^4.5.0
-  wakelock_plus: ^1.2.0
+  flutter_secure_storage: ^9.2.4
+  crypto: ^3.0.6
+  cryptography: ^2.7.0
+  workmanager: ^0.10.7
+  flutter_foreground_task: ^10.0.0
+  flutter_markdown_plus: ^1.0.12
+  url_launcher: ^6.3.2
 
 dependency_overrides:
   record_platform_interface: 1.0.0
+
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name: sqlite3
+      name_windows: winsqlite3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  sqflite_common_ffi: ^2.4.0+3
 
 flutter:
   uses-material-design: true

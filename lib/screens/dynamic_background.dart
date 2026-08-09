@@ -46,7 +46,8 @@ class _DynamicBackgroundState extends State<DynamicBackground>
   void initState() {
     super.initState();
     // 120 秒长周期动画，避免快速循环
-    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 120));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(seconds: 120));
   }
 
   @override
@@ -99,7 +100,8 @@ class _DynamicBackgroundState extends State<DynamicBackground>
   /// 默认环境粒子：无 AI 设置 effects 时的保底渲染
   List<Map<String, dynamic>> _defaultParticles(Color accent) {
     // ⚠️ 颜色编码：value 是 ARGB int → hex → 去掉 Alpha 通道 → RRGGBB
-    final hex = '#${accent.value.toRadixString(16).padLeft(8, '0').substring(2)}';
+    final hex =
+        '#${accent.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}';
     return [
       {
         'op': 'particles',
@@ -124,14 +126,14 @@ abstract class _BgOp {}
 
 /// 粒子操作：支持圆形/椭圆/多边形/特殊形状（心形/星形等）
 class _ParticleOp extends _BgOp {
-  final List<Offset> poly;   // 多边形顶点（归一化坐标），空表示圆形
+  final List<Offset> poly; // 多边形顶点（归一化坐标），空表示圆形
   final bool isCircle, isEllipse;
   final double ellipseW, ellipseH;
   final Color color;
   final int count;
   final double size, speed, opacity;
   final int seed;
-  final String? shape;       // 'heart','star','spark','?' — 每粒子的特殊形状
+  final String? shape; // 'heart','star','spark','?' — 每粒子的特殊形状
 
   _ParticleOp({
     this.poly = const [],
@@ -223,7 +225,10 @@ class _GridOp extends _BgOp {
     final color = Color(int.parse(h.length == 6 ? 'FF$h' : h, radix: 16));
     final lines = (m['lines'] as num?)?.toInt() ?? 12;
     final opacity = (m['opacity'] as num?)?.toDouble() ?? 0.15;
-    return _GridOp(color: color, lines: lines.clamp(4, 40), opacity: opacity.clamp(0.02, 0.5));
+    return _GridOp(
+        color: color,
+        lines: lines.clamp(4, 40),
+        opacity: opacity.clamp(0.02, 0.5));
   }
 }
 
@@ -232,7 +237,11 @@ class _RingOp extends _BgOp {
   final Color color;
   final int count;
   final double thickness, opacity;
-  _RingOp({required this.color, this.count = 3, this.thickness = 1.5, this.opacity = 0.5});
+  _RingOp(
+      {required this.color,
+      this.count = 3,
+      this.thickness = 1.5,
+      this.opacity = 0.5});
 
   static _RingOp? tryParse(Map<String, dynamic> m) {
     final colorHex = m['color'] as String? ?? '#FFFFFF';
@@ -241,7 +250,11 @@ class _RingOp extends _BgOp {
     final count = (m['count'] as num?)?.toInt() ?? 3;
     final thickness = (m['thickness'] as num?)?.toDouble() ?? 1.5;
     final opacity = (m['opacity'] as num?)?.toDouble() ?? 0.5;
-    return _RingOp(color: color, count: count.clamp(1, 10), thickness: thickness.clamp(0.5, 6), opacity: opacity.clamp(0.1, 1.0));
+    return _RingOp(
+        color: color,
+        count: count.clamp(1, 10),
+        thickness: thickness.clamp(0.5, 6),
+        opacity: opacity.clamp(0.1, 1.0));
   }
 }
 
@@ -250,7 +263,11 @@ class _ScanlineOp extends _BgOp {
   final Color color;
   final double spacing, opacity;
   final bool horizontal;
-  _ScanlineOp({required this.color, this.spacing = 4.0, this.opacity = 0.06, this.horizontal = true});
+  _ScanlineOp(
+      {required this.color,
+      this.spacing = 4.0,
+      this.opacity = 0.06,
+      this.horizontal = true});
 
   static _ScanlineOp? tryParse(Map<String, dynamic> m) {
     final colorHex = m['color'] as String? ?? '#FFFFFF';
@@ -259,19 +276,30 @@ class _ScanlineOp extends _BgOp {
     final spacing = (m['spacing'] as num?)?.toDouble() ?? 4.0;
     final opacity = (m['opacity'] as num?)?.toDouble() ?? 0.06;
     final horizontal = m['horizontal'] != false;
-    return _ScanlineOp(color: color, spacing: spacing.clamp(1, 20), opacity: opacity.clamp(0.01, 0.3), horizontal: horizontal);
+    return _ScanlineOp(
+        color: color,
+        spacing: spacing.clamp(1, 20),
+        opacity: opacity.clamp(0.01, 0.3),
+        horizontal: horizontal);
   }
 }
 
 /// 画布元素操作：静态形状（椭圆/矩形/圆形/路径）+ 模糊 + 混合模式
 class _CanvasOp extends _BgOp {
-  final String shape;   // 'ellipse','rect','circle','path'
+  final String shape; // 'ellipse','rect','circle','path'
   final Color color;
   final double blur, opacity, x, y, w, h, rotation;
-  final String blend;   // 'screen','overlay','softLight','plus'
+  final String blend; // 'screen','overlay','softLight','plus'
   _CanvasOp({
-    this.shape = 'ellipse', required this.color, this.blur = 0, this.opacity = 0.5,
-    this.x = 0.5, this.y = 0.5, this.w = 0.6, this.h = 0.4, this.rotation = 0,
+    this.shape = 'ellipse',
+    required this.color,
+    this.blur = 0,
+    this.opacity = 0.5,
+    this.x = 0.5,
+    this.y = 0.5,
+    this.w = 0.6,
+    this.h = 0.4,
+    this.rotation = 0,
     this.blend = 'screen',
   });
 
@@ -288,9 +316,17 @@ class _CanvasOp extends _BgOp {
     final hh = (m['h'] as num?)?.toDouble() ?? 0.4;
     final rotation = (m['rotation'] as num?)?.toDouble() ?? 0;
     final blend = m['blend'] as String? ?? 'screen';
-    return _CanvasOp(shape: shape, color: color, blur: blur.clamp(0, 80),
-      opacity: opacity.clamp(0.05, 1.0), x: x.clamp(-0.5, 1.5), y: y.clamp(-0.5, 1.5),
-      w: w.clamp(0.01, 3), h: hh.clamp(0.01, 3), rotation: rotation, blend: blend);
+    return _CanvasOp(
+        shape: shape,
+        color: color,
+        blur: blur.clamp(0, 80),
+        opacity: opacity.clamp(0.05, 1.0),
+        x: x.clamp(-0.5, 1.5),
+        y: y.clamp(-0.5, 1.5),
+        w: w.clamp(0.01, 3),
+        h: hh.clamp(0.01, 3),
+        rotation: rotation,
+        blend: blend);
   }
 }
 
@@ -303,7 +339,11 @@ class _BgPainter extends CustomPainter {
   final Color color;
   final List<_BgOp> ops;
 
-  _BgPainter({required this.time, required this.density, required this.color, required this.ops});
+  _BgPainter(
+      {required this.time,
+      required this.density,
+      required this.color,
+      required this.ops});
 
   /// 解析 effects JSON → 类型安全的 op 列表。解析错误单独跳过。
   static List<_BgOp> parseOps(List<Map<String, dynamic>>? effects) {
@@ -350,12 +390,18 @@ class _BgPainter extends CustomPainter {
     final op = m['op'] as String?;
     if (op == null) return null;
     switch (op) {
-      case 'particles': return _ParticleOp.tryParse(m);
-      case 'grid': return _GridOp.tryParse(m);
-      case 'pulse_ring': return _RingOp.tryParse(m);
-      case 'scanlines': return _ScanlineOp.tryParse(m);
-      case 'canvas': return _CanvasOp.tryParse(m);
-      default: return null;
+      case 'particles':
+        return _ParticleOp.tryParse(m);
+      case 'grid':
+        return _GridOp.tryParse(m);
+      case 'pulse_ring':
+        return _RingOp.tryParse(m);
+      case 'scanlines':
+        return _ScanlineOp.tryParse(m);
+      case 'canvas':
+        return _CanvasOp.tryParse(m);
+      default:
+        return null;
     }
   }
 
@@ -383,10 +429,22 @@ class _BgPainter extends CustomPainter {
       final cx = x * w, cy = y * h;
 
       // ⚠️ 特殊形状绘制：与 particle_overlay.dart 中的逻辑重复，应提取到共享模块
-      if (e.shape == 'heart') { _drawHeart(canvas, cx, cy, s, paint); continue; }
-      if (e.shape == 'star') { _drawStar(canvas, cx, cy, s, paint); continue; }
-      if (e.shape == 'spark') { _drawSpark(canvas, cx, cy, s, paint); continue; }
-      if (e.shape == '?') { _drawQuestion(canvas, cx, cy, s, paint, e.color); continue; }
+      if (e.shape == 'heart') {
+        _drawHeart(canvas, cx, cy, s, paint);
+        continue;
+      }
+      if (e.shape == 'star') {
+        _drawStar(canvas, cx, cy, s, paint);
+        continue;
+      }
+      if (e.shape == 'spark') {
+        _drawSpark(canvas, cx, cy, s, paint);
+        continue;
+      }
+      if (e.shape == '?') {
+        _drawQuestion(canvas, cx, cy, s, paint, e.color);
+        continue;
+      }
 
       // 默认形状：圆形 / 椭圆 / 多边形
       if (e.isCircle) {
@@ -433,7 +491,11 @@ class _BgPainter extends CustomPainter {
       final angle = -math.pi / 2 + i * 4 * math.pi / 5;
       final px = x + math.cos(angle) * r;
       final py = y + math.sin(angle) * r;
-      if (i == 0) { path.moveTo(px, py); } else { path.lineTo(px, py); }
+      if (i == 0) {
+        path.moveTo(px, py);
+      } else {
+        path.lineTo(px, py);
+      }
     }
     path.close();
     c.drawPath(path, p);
@@ -455,9 +517,13 @@ class _BgPainter extends CustomPainter {
   }
 
   /// 绘制问号文本
-  void _drawQuestion(Canvas c, double x, double y, double s, Paint p, Color color) {
+  void _drawQuestion(
+      Canvas c, double x, double y, double s, Paint p, Color color) {
     final tp = TextPainter(
-      text: TextSpan(text: '?', style: TextStyle(color: color, fontSize: s * 1.2, fontWeight: FontWeight.bold)),
+      text: TextSpan(
+          text: '?',
+          style: TextStyle(
+              color: color, fontSize: s * 1.2, fontWeight: FontWeight.bold)),
       textDirection: TextDirection.ltr,
     )..layout();
     tp.paint(c, Offset(x - tp.width / 2, y - tp.height / 2));
@@ -469,14 +535,16 @@ class _BgPainter extends CustomPainter {
       ..color = g.color.withValues(alpha: g.opacity)
       ..strokeWidth = 0.5;
     final w = size.width, h = size.height;
-    final cx = w / 2, cy = h * 0.4;  // 汇聚点偏上
+    final cx = w / 2, cy = h * 0.4; // 汇聚点偏上
 
     for (int i = -g.lines; i <= g.lines; i++) {
       final x = cx + i * (w / g.lines);
       final t = math.sin(time * 0.3 + i * 0.5) * 0.1;
-      canvas.drawLine(Offset(x, 0), Offset(cx + (x - cx) * 0.1, cy * (1 + t)), paint);
+      canvas.drawLine(
+          Offset(x, 0), Offset(cx + (x - cx) * 0.1, cy * (1 + t)), paint);
       final y = cy + i * (h / g.lines);
-      canvas.drawLine(Offset(0, y), Offset(w, y + (y - cy) * 0.05 * math.sin(time * 0.2)), paint);
+      canvas.drawLine(Offset(0, y),
+          Offset(w, y + (y - cy) * 0.05 * math.sin(time * 0.2)), paint);
     }
   }
 
@@ -524,11 +592,20 @@ class _BgPainter extends CustomPainter {
     }
     // 混合模式
     switch (op.blend) {
-      case 'screen': paint.blendMode = BlendMode.screen; break;
-      case 'overlay': paint.blendMode = BlendMode.overlay; break;
-      case 'softLight': paint.blendMode = BlendMode.softLight; break;
-      case 'plus': paint.blendMode = BlendMode.plus; break;
-      default: break;
+      case 'screen':
+        paint.blendMode = BlendMode.screen;
+        break;
+      case 'overlay':
+        paint.blendMode = BlendMode.overlay;
+        break;
+      case 'softLight':
+        paint.blendMode = BlendMode.softLight;
+        break;
+      case 'plus':
+        paint.blendMode = BlendMode.plus;
+        break;
+      default:
+        break;
     }
 
     canvas.save();
@@ -539,7 +616,8 @@ class _BgPainter extends CustomPainter {
 
     switch (op.shape) {
       case 'rect':
-        canvas.drawRect(Rect.fromCenter(center: Offset.zero, width: rw, height: rh), paint);
+        canvas.drawRect(
+            Rect.fromCenter(center: Offset.zero, width: rw, height: rh), paint);
         break;
       case 'circle':
         canvas.drawCircle(Offset.zero, (rw + rh) / 4, paint);
@@ -556,7 +634,8 @@ class _BgPainter extends CustomPainter {
         break;
       case 'ellipse':
       default:
-        canvas.drawOval(Rect.fromCenter(center: Offset.zero, width: rw, height: rh), paint);
+        canvas.drawOval(
+            Rect.fromCenter(center: Offset.zero, width: rw, height: rh), paint);
     }
     canvas.restore();
   }
@@ -570,5 +649,8 @@ class _BgPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BgPainter old) =>
-      old.time != time || old.density != density || old.color != color || old.ops != ops;
+      old.time != time ||
+      old.density != density ||
+      old.color != color ||
+      old.ops != ops;
 }

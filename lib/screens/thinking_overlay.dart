@@ -5,32 +5,45 @@
 
 library;
 
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'agent_avatar.dart';
 
 String _stateLabel(AgentState s) {
   switch (s) {
-    case AgentState.thinking:  return '思考中...';
-    case AgentState.coding:    return '写代码...';
-    case AgentState.searching: return '搜索中...';
-    case AgentState.reading:   return '阅读中...';
-    case AgentState.writing:   return '写入文件...';
-    case AgentState.speaking:  return '回复中...';
-    default: return '';
+    case AgentState.thinking:
+      return '思考中...';
+    case AgentState.coding:
+      return '写代码...';
+    case AgentState.searching:
+      return '搜索中...';
+    case AgentState.reading:
+      return '阅读中...';
+    case AgentState.writing:
+      return '写入文件...';
+    case AgentState.speaking:
+      return '回复中...';
+    default:
+      return '';
   }
 }
 
 IconData? _stateIcon(AgentState s) {
   switch (s) {
-    case AgentState.thinking:  return Icons.psychology_outlined;
-    case AgentState.coding:    return Icons.code;
-    case AgentState.searching: return Icons.travel_explore;
-    case AgentState.reading:   return Icons.menu_book_outlined;
-    case AgentState.writing:   return Icons.edit_note;
-    case AgentState.speaking:  return Icons.mic_none;
-    default: return null;
+    case AgentState.thinking:
+      return Icons.psychology_outlined;
+    case AgentState.coding:
+      return Icons.code;
+    case AgentState.searching:
+      return Icons.travel_explore;
+    case AgentState.reading:
+      return Icons.menu_book_outlined;
+    case AgentState.writing:
+      return Icons.edit_note;
+    case AgentState.speaking:
+      return Icons.mic_none;
+    default:
+      return null;
   }
 }
 
@@ -39,10 +52,22 @@ IconData? _stateIcon(AgentState s) {
 class ThinkingOverlay extends StatefulWidget {
   final AgentState state;
   final Color accentColor;
+  final Color? backgroundColor;
+  final Color? borderColor;
+  final Color? textColor;
   final String? statusText;
   final DateTime? sendStartedAt;
 
-  const ThinkingOverlay({super.key, required this.state, required this.accentColor, this.statusText, this.sendStartedAt});
+  const ThinkingOverlay({
+    super.key,
+    required this.state,
+    required this.accentColor,
+    this.backgroundColor,
+    this.borderColor,
+    this.textColor,
+    this.statusText,
+    this.sendStartedAt,
+  });
 
   bool get _visible => state != AgentState.idle && state != AgentState.sleeping;
 
@@ -79,10 +104,9 @@ class _ThinkingOverlayState extends State<ThinkingOverlay> {
     final shouldTick = widget._visible && widget.sendStartedAt != null;
     if (shouldTick) {
       _timer ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
-        if (mounted &&
-            widget._visible &&
-            widget.sendStartedAt != null) {
-          final secs = DateTime.now().difference(widget.sendStartedAt!).inSeconds;
+        if (mounted && widget._visible && widget.sendStartedAt != null) {
+          final secs =
+              DateTime.now().difference(widget.sendStartedAt!).inSeconds;
           if (secs != _elapsed) {
             setState(() => _elapsed = secs);
           }
@@ -116,27 +140,65 @@ class _ThinkingOverlayState extends State<ThinkingOverlay> {
         duration: const Duration(milliseconds: 200),
         opacity: widget._visible ? 1.0 : 0.0,
         child: widget._visible
-            ? Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                decoration: BoxDecoration(
-                  color: widget.accentColor.withValues(alpha: 0.06),
-                  border: Border(bottom: BorderSide(color: widget.accentColor.withValues(alpha: 0.1), width: 0.5)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _AnimatedDot(color: widget.accentColor),
-                    const SizedBox(width: 8),
-                    if (_stateIcon(widget.state) != null) ...[
-                      Icon(_stateIcon(widget.state), size: 14, color: widget.accentColor),
-                      const SizedBox(width: 6),
-                    ],
-                    Text(
-                      _label,
-                      style: TextStyle(fontSize: 12, color: widget.accentColor, fontWeight: FontWeight.w500),
+            ? Padding(
+                padding: const EdgeInsets.fromLTRB(12, 3, 12, 3),
+                child: Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: widget.backgroundColor ??
+                        widget.accentColor.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(13),
+                    border: Border.all(
+                      color: widget.borderColor ??
+                          widget.accentColor.withValues(alpha: 0.14),
+                      width: 0.8,
                     ),
-                  ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'RUN',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontFamily: 'monospace',
+                          color: widget.accentColor,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.9,
+                        ),
+                      ),
+                      const SizedBox(width: 7),
+                      Container(
+                        width: 1,
+                        height: 13,
+                        color: (widget.borderColor ?? widget.accentColor)
+                            .withValues(alpha: 0.55),
+                      ),
+                      const SizedBox(width: 8),
+                      _AnimatedDot(color: widget.accentColor),
+                      const SizedBox(width: 8),
+                      if (_stateIcon(widget.state) != null) ...[
+                        Icon(_stateIcon(widget.state),
+                            size: 14, color: widget.accentColor),
+                        const SizedBox(width: 6),
+                      ],
+                      Flexible(
+                        child: Text(
+                          _label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: widget.textColor ?? widget.accentColor,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.1,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               )
             : const SizedBox.shrink(),
@@ -153,18 +215,23 @@ class _AnimatedDot extends StatefulWidget {
   State<_AnimatedDot> createState() => _AnimatedDotState();
 }
 
-class _AnimatedDotState extends State<_AnimatedDot> with SingleTickerProviderStateMixin {
+class _AnimatedDotState extends State<_AnimatedDot>
+    with SingleTickerProviderStateMixin {
   late AnimationController _ctrl;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1200));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1200));
     _ctrl.repeat();
   }
 
   @override
-  void dispose() { _ctrl.dispose(); super.dispose(); }
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -178,7 +245,8 @@ class _AnimatedDotState extends State<_AnimatedDot> with SingleTickerProviderSta
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 1.5),
             child: Container(
-              width: 5, height: 5,
+              width: 5,
+              height: 5,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: widget.color.withValues(alpha: opacity.clamp(0.1, 0.9)),

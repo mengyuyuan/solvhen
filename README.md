@@ -1,149 +1,165 @@
 # Solvhen
 
-> A phone that thinks. Not a chatbot — an AI agent that lives on your device.
+> A phone that thinks. 一个运行在 Android 本机、由用户控制权限与模型的 AI Agent。
 
-Solvhen is an open-source Android AI agent built with Flutter. It can see your screen, control your phone, modify its own UI in real time, and remember everything you've told it. Think of it as an operating system for AI on mobile.
+Solvhen 是 Flutter 编写的 Android AI Agent。它保留对话、记忆、语音、网页、文件、设备控制、动态界面和子 Agent 等能力，同时把模型调用、工具策略、确认、审计与数据存储分层处理。
 
-> **世于我愿** — "What I wish upon the world."
+当前主线正在进行公开 Beta 加固。Android 是首要且唯一的发布验收平台。
 
-## What Makes It Different
+## 核心原则
 
-| Typical AI App | Solvhen |
+- **本地优先**：对话、记忆、配置和审计默认保存在设备上。
+- **用户自带 Key**：支持 OpenAI-compatible 模型端点；Key 迁移到 Android 安全存储。
+- **默认安全**：只读工具可自动执行，副作用能力受权限开关和确认控制。
+- **来源隔离**：本地用户、OneBot、主动任务、子 Agent、动态工具使用不同策略。
+- **无自动遥测**：诊断包只在用户主动导出时生成，并排除消息、密钥和路径。
+- **运行有边界**：每次任务都有步数、循环次数和截止时间，不会无限执行或崩溃后重放。
+
+## 主要能力
+
+- 对话流式输出、工具调用进度与可取消运行
+- GitHub Flavored Markdown 回复、代码块与安全外链展示
+- 跨对话长期记忆、情景记忆和本地全文检索
+- 文件、网页、设备状态与系统控制工具
+- Edge TTS、语音输入和独立语音对话
+- 人格、模型链、图片与视频服务配置
+- 点阵科技视觉系统与 AI 动态画布
+- 局域网 OneBot 桥接（默认关闭）
+- 受限只读子 Agent 委派，禁止递归委派
+- 主动任务调度：前台计时、WorkManager 周期任务与显式前台服务
+- 受限动态工具 DSL 与默认锁定的私网开发者通道
+
+工具数量和数据库结构会随代码演进，因此文档不维护容易漂移的手写计数；以 `ToolRegistry` 注册结果和数据库迁移代码为准。
+
+## Agent 运行预算
+
+在 **设置 → Agent 运行** 中可调整：
+
+- 每轮工具步数：1–100
+- 最大循环：1–10
+- 单次运行截止时间：1–30 分钟
+- 循环策略：逐轮询问、自动循环、仅执行一轮
+
+理论工具上限为“每轮步数 × 有效循环数”，最大仍为有限值。逐轮询问模式到达边界后由用户决定继续下一轮或停止工具并让模型总结；自动循环的高预算配置在保存时会再次确认。设置只对下一次发送生效，不会改变正在运行的任务。
+
+子 Agent 使用独立的小预算，并且只会获得任务中显式声明工具集内的只读工具。主 Agent 的高预算不会自动放大到子 Agent。
+
+## 安全模型
+
+`ToolPolicyEngine` 在工具真正执行前统一决策：
+
+| 来源 | 默认开放范围 |
 |---|---|
-| Chat in a bubble | Modifies its own interface dynamically |
-| Forgets everything between sessions | Persistent memory across conversations |
-| Static theme | AI controls the theme, animations, and background |
-| Text-only | Voice, tools, code execution, web search |
-| No device access | Native Android bridge — clipboard, flashlight, screen, apps |
+| 本地用户 | 只读自动；修改确认；高风险始终确认 |
+| OneBot | 当前消息回复、网络查询和安全只读能力 |
+| 主动任务 | 只读、记忆读取和本地通知相关能力 |
+| 子 Agent | 显式工具集白名单中的只读工具 |
+| 动态工具 | 嵌套调用也必须重新经过策略 |
 
-## Features
+信任模式只在当前应用进程中有效。发送、删除、安装、锁屏和修改系统设置等操作不会因信任模式跳过逐次确认。所有策略执行会写入本地脱敏审计日志。
 
-- **🛠 Tool System** — 27+ tools including file operations, web search, code execution, system control, clipboard, theme manipulation, and a WebView canvas for AI-generated UI
-- **🧠 Memory Engine** — Cross-conversation memory with automatic consolidation. Remembers preferences, facts, and context
-- **🎨 Dynamic UI** — AI controls particle effects, gradients, scanlines, and pulse rings. No templates — raw primitives the AI combines freely
-- **🗣 Voice** — Edge TTS streaming with natural pauses. Speech-to-text input
-- **🖼 WebView Canvas** — AI generates HTML/JS/CSS visualizations rendered in a native WebView
-- **👤 Personality System** — Markdown-driven personality files (not hardcoded rules). The AI has biases, blind spots, and inconsistency — by design
-- **📱 Android Native** — System-level access via platform channels: clipboard, flashlight, screen lock, app launching, volume, brightness
-- **🔄 Streaming** — SSE-based streaming responses with real-time tool call display
+动态工具只能使用受限 DSL，并须在注册时声明能力、展示代码和逐次确认。DSL 内的每个嵌套工具仍以 `dynamicTool` 来源重新进入策略引擎，不能携带原生 Dart 代码，也不能递归委派或调用开发工具。
 
-## Architecture
+## 后台调度
 
+- 应用在前台时使用可取消 `Timer`。
+- 周期达到 15 分钟时，Android 后台交给 WorkManager。
+- 1–14 分钟高频周期必须由用户单独确认，并使用带常驻通知的前台服务。
+- SQLite 原子领取调度槽，避免多个 isolate 重复执行；崩溃后不会立即重放已领取任务。
+- 主动任务始终使用受限来源，只能访问只读、记忆和本地通知能力。
+
+## 开发者模式
+
+`rebuild_self` 不进入普通模型工具集。只有当前进程显式开启开发者模式后才可见，并且仅连接回环或私有局域网地址。请求需要 Android 安全存储中的 256 位 token、一次性 nonce、来源 IP 校验和每次用户确认；配套服务器默认只监听 `127.0.0.1`，不会从手机直接执行本地进程。
+
+## 架构
+
+```text
+Chat / OneBot / Proactive
+          │
+          ▼
+     AgentRuntime ────── LlmClient / OpenAI-compatible API
+          │
+          ▼
+   ToolPolicyEngine ─── 用户确认
+          │
+          ▼
+     ToolExecutor ───── 文件 / Android / Web / OTA adapters
+          │
+          ├──────────── 本地审计
+          ▼
+Conversation / Memory repositories ─── SQLite
 ```
+
+主要目录：
+
+```text
 lib/
-├── main.dart                    # Entry point
-├── screens/
-│   ├── chat_screen.dart         # Main chat UI (Stack: WebView + messages)
-│   ├── chat_provider.dart       # Riverpod state management
-│   ├── agent_avatar.dart        # 8-state animated avatar engine
-│   ├── ui_controller.dart       # AI-controlled UI state (colors, effects)
-│   ├── webview_canvas.dart      # WebView rendering layer
-│   ├── dynamic_background.dart  # AI-driven background effects
-│   ├── particle_overlay.dart    # Particle system
-│   ├── thinking_overlay.dart    # Thinking/processing indicator
-│   ├── settings_screen.dart     # API config, changelog, voice settings
-│   └── voice_chat_screen.dart   # Voice interaction mode
-├── services/
-│   ├── api_service.dart         # DeepSeek-compatible API (SSE + tools)
-│   ├── database_service.dart    # SQLite (sqflite, WAL, migrations v1→v7)
-│   ├── prompt_builder.dart      # System prompt assembly (persona + skills + memory)
-│   ├── personality_loader.dart  # Markdown personality file loading
-│   ├── skill_loader.dart        # Skill file loading from assets/
-│   ├── tool_executor.dart       # Tool dispatch and execution
-│   ├── voice_service.dart       # Voice pipeline (TTS + STT)
-│   ├── edge_tts.dart            # Edge TTS streaming client
-│   ├── notification_service.dart # Local notifications
-│   └── sub_agent.dart           # Background agent delegation
-├── tools/                       # 27+ tool implementations
-│   ├── tool_registry.dart       # Tool registration and discovery
-│   ├── native_bridge.dart       # Android platform channel bridge
-│   ├── tools_code.dart          # Code execution
-│   ├── tools_file.dart          # File read/write/list
-│   ├── tools_web.dart           # Web search
-│   ├── tools_web_extract.dart   # Web content extraction
-│   ├── tools_system.dart        # System control (clipboard, screen, apps)
-│   ├── tools_ui.dart            # Canvas, theme, effects control
-│   ├── tools_memory.dart        # Memory CRUD
-│   ├── tools_theme.dart         # Dynamic theme manipulation
-│   ├── tools_history.dart       # Conversation history
-│   └── tools_delegate.dart      # Sub-agent delegation
-├── models/                      # Data models
-├── commands/                    # Slash-command system
-└── theme/                       # Theme provider
+├── core/
+│   ├── agent/       # 运行状态、取消、步数/循环/截止时间
+│   ├── llm/         # 模型配置、密钥迁移与客户端边界
+│   └── security/    # 来源、风险、能力和策略
+├── screens/         # 对话、引导、安全中心与设置 UI
+├── services/        # 数据库、语音、OneBot、主动任务、更新等适配器
+├── tools/           # 工具定义与实现
+├── commands/        # 本地斜杠命令
+└── theme/           # 点阵科技设计系统
 ```
 
-## Quick Start
+更详细的状态机、边界和发布门槛见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-### Prerequisites
+## OTA 更新约束
 
-- Flutter SDK ≥ 3.2.0
-- Android SDK + device/emulator
-- DeepSeek API key (or any OpenAI-compatible endpoint)
+- 未配置更新地址时，应用启动不会发起 OTA 网络请求。
+- 只允许固定官方 HTTPS 主机 `ota.sywy.app`，旧版临时隧道地址不会自动访问。
+- release 构建必须注入固定 Ed25519 发布公钥；没有公钥时 OTA 保持锁定，不会降级。
+- 更新清单必须通过 Ed25519 签名，并包含匹配的包名、APK SHA-256 和签名证书摘要。
+- APK 下载后及打开安装器前都会复验文件哈希、实际包名和签名证书；失败立即删除。
+- 进入 Android 安装器前由用户明确确认；系统安装器还会再次确认。
 
-### Setup
+`tool/generate_update_manifest.dart` 由 tag release 工作流调用，生成与客户端同一规范的签名 `latest.json`。发布构建使用 `--dart-define=SOLVHEN_OTA_PUBLIC_KEY=...` 固定公钥，私钥只存在于发布环境。
+
+## 开发
+
+### 环境
+
+- Flutter / Dart（版本范围见 `pubspec.yaml`）
+- Android SDK 与真机或模拟器
+- 用户自己的 OpenAI-compatible API Key
+
+### 启动
 
 ```bash
-# Clone
-git clone https://github.com/mengyuyuan/solvhen.git
-cd solvhen
-
-# Get dependencies
 flutter pub get
-
-# Run on connected device
 flutter run
 ```
 
-### Configuration
+首次启动会说明本地数据、模型 Key、按需权限和高风险确认。已有数据库升级时保留对话、记忆、人格和配置；普通打开错误不会自动删除数据库。
 
-1. Open the app on your device
-2. Go to Settings → API Configuration
-3. Enter your API endpoint and key:
-   - **URL**: `https://api.deepseek.com/v1/chat/completions`
-   - **Model**: `deepseek-chat` (or `deepseek-reasoner`)
-   - **Key**: Your DeepSeek API key
-4. (Optional) Configure voice settings
-
-### Release Build
+### 质量检查
 
 ```bash
-# Copy and edit the signing template
-cp android/key.properties.example android/key.properties
-# Edit key.properties with your keystore details
-
-# Build
+flutter analyze
+flutter test
 flutter build apk --release
 ```
 
-## Tech Stack
+仓库包含 Android CI 与 tag release 工作流。正式 release 需要配置 Android keystore 和 OTA Ed25519 密钥相关的 GitHub Secrets；缺失任一项时工作流会直接失败，不产出不安全更新。
 
-| Layer | Technology |
-|---|---|
-| Framework | Flutter 3.2+ / Dart |
-| State | Riverpod |
-| Database | SQLite (sqflite, WAL mode, 7 migrations) |
-| HTTP | Dio (SSE streaming) |
-| Voice | Edge TTS + Flutter TTS + speech_to_text |
-| Native | Platform channels (Kotlin) |
-| WebView | webview_flutter 4.4+ |
-| API | DeepSeek (OpenAI-compatible, supports function calling) |
+CI 同时运行开发者重建服务器鉴权/nonce 测试；Flutter 测试覆盖运行预算、取消、SSE 分片、权限矩阵、OneBot 限流、历史数据库迁移、主动调度去重、动态工具嵌套策略和 WebView 画布会话清理。
 
-## Design Philosophy
+发布前还必须在 Android 真机验证：旧数据库升级、权限撤回、离线启动、运行取消、对话切换、眼睛状态动画、诊断导出和安装确认。
 
-Solvhen was built around a few core ideas:
+## UI 约束
 
-1. **Give primitives, not menus.** The AI doesn't pick from preset themes — it has access to raw drawing primitives (particles, gradients, polygons) and combines them freely.
-
-2. **Fall forward, never crash.** Every AI-generated effect has a graceful fallback. If the canvas render fails, it falls through to the base theme layer. Nothing breaks.
-
-3. **Personality is character, not rules.** The AI personality is defined in natural-language Markdown — not `IF-THEN` state machines. It has biases, blind spots, and inconsistencies that make it feel real.
-
-4. **The phone is the interface.** Solvhen doesn't just live in a chat bubble — it controls the device. Clipboard, flashlight, screen brightness, app launching — these are all tools the AI can use.
+- 主视觉使用暖白、海军蓝、青绿与点阵纹理，不使用纯黑作为页面底色。
+- 顶栏工作状态眼睛保持小尺寸并固定居中。
+- 对话末尾可以出现第二个小眼睛表示回复状态。
+- 空状态不放大眼睛；眼睛动画是状态反馈的一部分，不能删除。
+- AI 动态画布只短时挂载 Android WebView；截图、超时、切换对话、打开抽屉或进入设置后必须卸载原生表面，避免 MIUI 黑层与灰块覆盖。
+- 一次模型运行只形成一个完整回复气泡，避免列表、标题和代码块被按句拆散；流式阶段使用纯文本，完成后切换为富文本。
+- Markdown 外部图片默认只显示占位，不会因阅读回复自动请求第三方图片服务器。
 
 ## License
 
 MIT © 2026 mengyuyuan
-
----
-
-*Built with Flutter, powered by DeepSeek, driven by curiosity.*

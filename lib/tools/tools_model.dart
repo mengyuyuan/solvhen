@@ -4,7 +4,7 @@ library;
 
 import 'dart:convert';
 import '../models/llm_provider.dart';
-import '../services/database_service.dart';
+import '../core/llm/llm_config_store.dart';
 import 'tool_registry.dart';
 
 /// 注册模型链管理工具
@@ -13,6 +13,7 @@ import 'tool_registry.dart';
 /// 支持11家LLM厂商+自定义，策略：顺序降级/轮询负载
 void registerModelTools() {
   final registry = ToolRegistry();
+  final configStore = LlmConfigStore();
 
   // ── list_models — 列出模型链中所有可用模型 ──
   registry.register(ToolEntry(
@@ -25,12 +26,10 @@ void registerModelTools() {
     },
     handler: (args) async {
       try {
-        final cfg = await DB.getConfig();
-        final raw = cfg['llm_chain'];
-        if (raw == null || raw.isEmpty) {
+        final chain = await configStore.loadChain();
+        if (chain == null) {
           return jsonEncode({'models': [], 'note': '未配置模型链，请在设置中配置'});
         }
-        final chain = LlmChainConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
         final models = <Map<String, dynamic>>[];
         for (int i = 0; i < chain.slots.length; i++) {
           final s = chain.slots[i];
@@ -77,21 +76,19 @@ void registerModelTools() {
     handler: (args) async {
       try {
         final idx = (args['index'] as num?)?.toInt() ?? -1;
-        final cfg = await DB.getConfig();
-        final raw = cfg['llm_chain'];
-        if (raw == null || raw.isEmpty) return jsonEncode({'error': '未配置模型链'});
-        final chain = LlmChainConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final chain = await configStore.loadChain();
+        if (chain == null) return jsonEncode({'error': '未配置模型链'});
         if (chain.slots.isEmpty) return jsonEncode({'error': '模型链为空'});
         // -1 恢复自动模式：将 activeSlotIndex 设回 0，由降级策略自动选择
         if (idx == -1) {
-          await DB.setConfig('llm_chain', jsonEncode(chain.copyWith(activeSlotIndex: 0).toJson()));
+          await configStore.save(chain: chain.copyWith(activeSlotIndex: 0));
           return jsonEncode({'switched': true, 'mode': 'auto', 'note': '已恢复自动降级模式'});
         }
         if (idx < 0 || idx >= chain.slots.length) {
           return jsonEncode({'error': 'index 超出范围 (0-${chain.slots.length - 1})'});
         }
         final updated = chain.copyWith(activeSlotIndex: idx);
-        await DB.setConfig('llm_chain', jsonEncode(updated.toJson()));
+        await configStore.save(chain: updated);
         final s = updated.slots[idx];
         final vendor = findVendor(s.vendorId);
         return jsonEncode({
@@ -125,10 +122,8 @@ void registerModelTools() {
       try {
         final idx = (args['index'] as num?)?.toInt() ?? 0;
         final reason = (args['reason'] as String?) ?? '';
-        final cfg = await DB.getConfig();
-        final raw = cfg['llm_chain'];
-        if (raw == null || raw.isEmpty) return jsonEncode({'error': '未配置模型链'});
-        final chain = LlmChainConfig.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+        final chain = await configStore.loadChain();
+        if (chain == null) return jsonEncode({'error': '未配置模型链'});
         if (idx < 0 || idx >= chain.slots.length) {
           return jsonEncode({'error': 'index 超出范围 (0-${chain.slots.length - 1})'});
         }
@@ -136,7 +131,7 @@ void registerModelTools() {
         final vendor = findVendor(s.vendorId);
         final model = vendor?.models.cast<LlmModel?>().firstWhere((m) => m!.id == s.modelId, orElse: () => null);
         final updated = chain.copyWith(activeSlotIndex: idx);
-        await DB.setConfig('llm_chain', jsonEncode(updated.toJson()));
+        await configStore.save(chain: updated);
         return jsonEncode({
           'routed': true, 'index': idx,
           'vendor': vendor?.name ?? s.vendorId,

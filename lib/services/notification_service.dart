@@ -28,10 +28,12 @@ class NotificationService {
   factory NotificationService() => _instance;
   NotificationService._();
 
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
 
   /// Stream for in-app overlay — UI listens to this.
-  final StreamController<PushEvent> _pushController = StreamController<PushEvent>.broadcast();
+  final StreamController<PushEvent> _pushController =
+      StreamController<PushEvent>.broadcast();
   Stream<PushEvent> get onPush => _pushController.stream;
 
   bool _initialized = false;
@@ -45,7 +47,8 @@ class NotificationService {
       await Permission.notification.request();
     }
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -53,22 +56,25 @@ class NotificationService {
     );
 
     await _plugin.initialize(
-      settings: const InitializationSettings(android: androidSettings, iOS: iosSettings),
+      settings: const InitializationSettings(
+          android: androidSettings, iOS: iosSettings),
       onDidReceiveNotificationResponse: _onTap,
     );
 
     // Create notification channel for proactive messages
-    await _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>()?.createNotificationChannel(
-      const AndroidNotificationChannel(
-        'solvhen_messages',
-        'Solvhen 主动消息',
-        description: 'Solvhen 主动联系你时的提醒',
-        importance: Importance.high,
-        enableVibration: true,
-        playSound: true,
-      ),
-    );
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            'solvhen_messages',
+            'Solvhen 主动消息',
+            description: 'Solvhen 主动联系你时的提醒',
+            importance: Importance.high,
+            enableVibration: true,
+            playSound: true,
+          ),
+        );
 
     _initialized = true;
     debugPrint('[NotificationService] initialized');
@@ -119,14 +125,19 @@ class NotificationService {
           ongoing: ongoing,
           autoCancel: !ongoing,
         ),
-        iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true, presentSound: true),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
       ),
       payload: payload,
     );
 
     // In-app overlay (skip for keeper notifications)
     if (!ongoing) {
-      _pushController.add(PushEvent(title: title, body: body, payload: payload));
+      _pushController
+          .add(PushEvent(title: title, body: body, payload: payload));
     }
   }
 

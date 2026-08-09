@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'tool_registry.dart';
 import 'tool_utils.dart';
+import '../core/security/onebot_credentials.dart';
 import 'native_bridge.dart';
 import '../services/onebot_bridge.dart' as ob;
 import '../services/database_service.dart' as dbs;
@@ -25,7 +26,8 @@ void registerSystemTools() {
     name: 'get_time',
     toolset: 'system',
     schema: {
-      'name': 'get_time', 'description': '获取当前时间。',
+      'name': 'get_time',
+      'description': '获取当前时间。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async {
@@ -44,7 +46,8 @@ void registerSystemTools() {
     name: 'get_battery',
     toolset: 'system',
     schema: {
-      'name': 'get_battery', 'description': '获取手机电池电量和充电状态。',
+      'name': 'get_battery',
+      'description': '获取手机电池电量和充电状态。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async => jsonEncode(await NativeBridge.getBattery()),
@@ -55,7 +58,8 @@ void registerSystemTools() {
     name: 'get_volume',
     toolset: 'system',
     schema: {
-      'name': 'get_volume', 'description': '获取媒体音量和响铃模式。',
+      'name': 'get_volume',
+      'description': '获取媒体音量和响铃模式。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async => jsonEncode(await NativeBridge.getVolume()),
@@ -66,7 +70,8 @@ void registerSystemTools() {
     name: 'set_volume',
     toolset: 'system',
     schema: {
-      'name': 'set_volume', 'description': '设置媒体音量（0-100）。',
+      'name': 'set_volume',
+      'description': '设置媒体音量（0-100）。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -77,7 +82,8 @@ void registerSystemTools() {
     },
     handler: (args) async =>
         // clamp 保证值在合法范围内，防止 NativeBridge 收到非法值崩溃
-        jsonEncode(await NativeBridge.setVolume(clampInt(parseArgInt(args['level'], 50), 0, 100))),
+        jsonEncode(await NativeBridge.setVolume(
+            clampInt(parseArgInt(args['level'], 50), 0, 100))),
   ));
 
   // ── get_brightness — 获取屏幕亮度 ──
@@ -85,7 +91,8 @@ void registerSystemTools() {
     name: 'get_brightness',
     toolset: 'system',
     schema: {
-      'name': 'get_brightness', 'description': '获取屏幕亮度。',
+      'name': 'get_brightness',
+      'description': '获取屏幕亮度。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async => jsonEncode(await NativeBridge.getBrightness()),
@@ -96,7 +103,8 @@ void registerSystemTools() {
     name: 'set_brightness',
     toolset: 'system',
     schema: {
-      'name': 'set_brightness', 'description': '设置屏幕亮度。',
+      'name': 'set_brightness',
+      'description': '设置屏幕亮度。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -105,8 +113,8 @@ void registerSystemTools() {
         'required': ['level'],
       },
     },
-    handler: (args) async =>
-        jsonEncode(await NativeBridge.setBrightness(clampInt(parseArgInt(args['level'], 128), 0, 255))),
+    handler: (args) async => jsonEncode(await NativeBridge.setBrightness(
+        clampInt(parseArgInt(args['level'], 128), 0, 255))),
   ));
 
   // ── toggle_wifi — 开关 WiFi ──
@@ -114,7 +122,8 @@ void registerSystemTools() {
     name: 'toggle_wifi',
     toolset: 'system',
     schema: {
-      'name': 'toggle_wifi', 'description': '打开或关闭 WiFi。',
+      'name': 'toggle_wifi',
+      'description': '打开或关闭 WiFi。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -133,7 +142,8 @@ void registerSystemTools() {
     name: 'toggle_bluetooth',
     toolset: 'system',
     schema: {
-      'name': 'toggle_bluetooth', 'description': '打开或关闭蓝牙。',
+      'name': 'toggle_bluetooth',
+      'description': '打开或关闭蓝牙。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -142,8 +152,8 @@ void registerSystemTools() {
         'required': ['enable'],
       },
     },
-    handler: (args) async =>
-        jsonEncode(await NativeBridge.toggleBluetooth(_parseBool(args['enable']))),
+    handler: (args) async => jsonEncode(
+        await NativeBridge.toggleBluetooth(_parseBool(args['enable']))),
   ));
 
   // ── open_app — 打开手机应用 ──
@@ -151,7 +161,9 @@ void registerSystemTools() {
     name: 'open_app',
     toolset: 'system',
     schema: {
-      'name': 'open_app', 'description': '''★ 打开手机上的应用。★ 必须先调用 list_installed_apps 搜索包名再调用本工具！★ 禁止猜包名！
+      'name': 'open_app',
+      'description':
+          '''★ 打开手机上的应用。★ 必须先调用 list_installed_apps 搜索包名再调用本工具！★ 禁止猜包名！
 传入包名（如 com.tencent.mm）或已知中文名（微信/QQ/淘宝等）。
 如果你不知道应用的包名，先用 list_installed_apps 查询，然后用返回的 package 字段调用本工具。
 已知应用: 微信(com.tencent.mm), QQ(com.tencent.mobileqq), 百度地图(com.baidu.BaiduMap),
@@ -168,7 +180,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     },
     handler: (args) async {
       // 兼容多种参数名（package/app/packageName），防止 LLM 使用非标准字段名
-      final input = (args['package'] ?? args['app'] ?? args['packageName']) as String?;
+      final input =
+          (args['package'] ?? args['app'] ?? args['packageName']) as String?;
       if (input == null || input.isEmpty) {
         return jsonEncode({'error': '缺少 package 参数', 'hint': '需要传入应用中文名或包名'});
       }
@@ -213,11 +226,15 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'set_ringer_mode',
     toolset: 'system',
     schema: {
-      'name': 'set_ringer_mode', 'description': '设置响铃模式。',
+      'name': 'set_ringer_mode',
+      'description': '设置响铃模式。',
       'parameters': {
         'type': 'object',
         'properties': {
-          'mode': {'type': 'string', 'enum': ['normal', 'vibrate', 'silent']},
+          'mode': {
+            'type': 'string',
+            'enum': ['normal', 'vibrate', 'silent']
+          },
         },
         'required': ['mode'],
       },
@@ -231,7 +248,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'get_device_info',
     toolset: 'system',
     schema: {
-      'name': 'get_device_info', 'description': '获取手机型号和系统版本。',
+      'name': 'get_device_info',
+      'description': '获取手机型号和系统版本。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async => jsonEncode(await NativeBridge.getDeviceInfo()),
@@ -242,7 +260,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'get_clipboard',
     toolset: 'system',
     schema: {
-      'name': 'get_clipboard', 'description': '读取剪贴板文字内容。',
+      'name': 'get_clipboard',
+      'description': '读取剪贴板文字内容。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async => jsonEncode(await NativeBridge.getClipboard()),
@@ -253,7 +272,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'set_clipboard',
     toolset: 'system',
     schema: {
-      'name': 'set_clipboard', 'description': '将文字写入剪贴板。',
+      'name': 'set_clipboard',
+      'description': '将文字写入剪贴板。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -271,7 +291,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'toggle_flashlight',
     toolset: 'system',
     schema: {
-      'name': 'toggle_flashlight', 'description': '打开或关闭手电筒。需要相机权限。',
+      'name': 'toggle_flashlight',
+      'description': '打开或关闭手电筒。需要相机权限。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -280,8 +301,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
         'required': ['enable'],
       },
     },
-    handler: (args) async =>
-        jsonEncode(await NativeBridge.toggleFlashlight(_parseBool(args['enable']))),
+    handler: (args) async => jsonEncode(
+        await NativeBridge.toggleFlashlight(_parseBool(args['enable']))),
   ));
 
   // ── lock_screen — 锁定屏幕 ──
@@ -289,7 +310,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'lock_screen',
     toolset: 'system',
     schema: {
-      'name': 'lock_screen', 'description': '锁定屏幕。类似于按电源键。',
+      'name': 'lock_screen',
+      'description': '锁定屏幕。类似于按电源键。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async => jsonEncode(await NativeBridge.lockScreen()),
@@ -300,7 +322,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     name: 'keep_screen_on',
     toolset: 'system',
     schema: {
-      'name': 'keep_screen_on', 'description': '保持屏幕常亮（不自动息屏）。传入 false 恢复默认。',
+      'name': 'keep_screen_on',
+      'description': '保持屏幕常亮（不自动息屏）。传入 false 恢复默认。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -342,17 +365,22 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
         // 注意：正则 [(`$(){};&!<>] 不包含 |，因此管道符被允许用于多关键词过滤
         // 这是有意设计的——| 是合法的分隔符且不会导致命令注入
         if (RegExp(r'[`$(){};&!<>]').hasMatch(filter)) {
-          return jsonEncode({'error': 'filter 包含不允许的特殊字符', 'hint': '仅支持字母、数字、冒号、点和管道符(|)'});
+          return jsonEncode(
+              {'error': 'filter 包含不允许的特殊字符', 'hint': '仅支持字母、数字、冒号、点和管道符(|)'});
         }
         // 使用纯 Dart 做过滤，不依赖 shell grep，消除注入风险
         // runInShell: true 可能带来额外风险，但 filter 已经过验证
-        final result = await Process.run('logcat', ['-d', '-t', lines.toString()],
-            runInShell: true).timeout(const Duration(seconds: 15));
+        final result = await Process.run(
+                'logcat', ['-d', '-t', lines.toString()],
+                runInShell: true)
+            .timeout(const Duration(seconds: 15));
         var output = result.stdout.toString();
         if (filter.isNotEmpty) {
           // 按 | 分割多个过滤词，每行只要包含任意一个词就保留
-          final terms = filter.split('|').map((t) => t.trim()).where((t) => t.isNotEmpty);
-          output = output.split('\n')
+          final terms =
+              filter.split('|').map((t) => t.trim()).where((t) => t.isNotEmpty);
+          output = output
+              .split('\n')
               .where((line) => terms.any((t) => line.contains(t)))
               .join('\n');
         }
@@ -380,7 +408,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     toolset: 'system',
     schema: {
       'name': 'input_tap',
-      'description': '点击屏幕指定坐标。需先开启无障碍服务（设置→无障碍→Solvhen）。获取坐标：先用 get_screen_text 读屏幕内容，从返回的 bounds 中取x/y。',
+      'description':
+          '点击屏幕指定坐标。需先开启无障碍服务（设置→无障碍→Solvhen）。获取坐标：先用 get_screen_text 读屏幕内容，从返回的 bounds 中取x/y。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -487,7 +516,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     toolset: 'system',
     schema: {
       'name': 'get_screen_text',
-      'description': '读取当前屏幕上的所有可见文本和元素。返回每个元素的文字、是否可点击、坐标(bounds)。用于了解当前界面——找到按钮、输入框等。',
+      'description':
+          '读取当前屏幕上的所有可见文本和元素。返回每个元素的文字、是否可点击、坐标(bounds)。用于了解当前界面——找到按钮、输入框等。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async {
@@ -502,7 +532,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     toolset: 'system',
     schema: {
       'name': 'find_text',
-      'description': '在当前屏幕上查找包含指定文字的元素。返回匹配元素的文字、坐标、是否可点击。比 get_screen_text 更高效——只返回匹配项。',
+      'description':
+          '在当前屏幕上查找包含指定文字的元素。返回匹配元素的文字、坐标、是否可点击。比 get_screen_text 更高效——只返回匹配项。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -523,7 +554,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     toolset: 'system',
     schema: {
       'name': 'click_text',
-      'description': '查找并点击屏幕上包含指定文字的可点击元素。如 click_text("发送") 点击发送按钮。优先用这个而不是 input_tap——不需要坐标。',
+      'description':
+          '查找并点击屏幕上包含指定文字的可点击元素。如 click_text("发送") 点击发送按钮。优先用这个而不是 input_tap——不需要坐标。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -544,7 +576,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     toolset: 'system',
     schema: {
       'name': 'check_accessibility',
-      'description': '检查无障碍服务是否已开启。如果未开启，用 open_accessibility_settings 直接跳到设置页。',
+      'description':
+          '检查无障碍服务是否已开启。如果未开启，用 open_accessibility_settings 直接跳到设置页。',
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async {
@@ -636,7 +669,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async {
-      final result = await NativeBridge.inputSwipe(540, 1200, 540, 400, duration: 200);
+      final result =
+          await NativeBridge.inputSwipe(540, 1200, 540, 400, duration: 200);
       return jsonEncode(result);
     },
   ));
@@ -650,7 +684,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
       'parameters': {'type': 'object', 'properties': {}, 'required': []},
     },
     handler: (args) async {
-      final result = await NativeBridge.inputSwipe(540, 400, 540, 1200, duration: 200);
+      final result =
+          await NativeBridge.inputSwipe(540, 400, 540, 1200, duration: 200);
       return jsonEncode(result);
     },
   ));
@@ -678,10 +713,8 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
       // 如果服务未开启，引导用户打开设置
       if (result['service_enabled'] != true) {
         unawaited(NativeBridge.openNotificationListenerSettings());
-        return jsonEncode({
-          ...result,
-          'hint': '通知监听服务未开启，已为你打开设置页。请找到 Solvhen 并开启。'
-        });
+        return jsonEncode(
+            {...result, 'hint': '通知监听服务未开启，已为你打开设置页。请找到 Solvhen 并开启。'});
       }
       return jsonEncode(result);
     },
@@ -693,11 +726,15 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
     toolset: 'system',
     schema: {
       'name': 'wait',
-      'description': '等待指定毫秒数。在操作之间加延迟——UI切换需要时间，太快会导致操作失败。建议每次操作后等待500-1000ms。',
+      'description':
+          '等待指定毫秒数。在操作之间加延迟——UI切换需要时间，太快会导致操作失败。建议每次操作后等待500-1000ms。',
       'parameters': {
         'type': 'object',
         'properties': {
-          'ms': {'type': 'integer', 'description': '等待毫秒数。默认1000(1秒)，建议500-2000。'},
+          'ms': {
+            'type': 'integer',
+            'description': '等待毫秒数。默认1000(1秒)，建议500-2000。'
+          },
         },
         'required': [],
       },
@@ -717,23 +754,29 @@ B站(com.bilibili.app.in), 微博(com.sina.weibo), 网易云(com.netease.cloudmu
 String resolveAppPackage(String input) {
   // 含点号 → 视为包名直接返回
   if (input.contains('.')) return input;
+
   /// 内置中文名 → 包名映射表。
   /// 注意：全部 key 为小写，resolveAppPackage 中会先 toLowerCase 再查表。
   /// 多个 key 可映射到同一包名（如「地图」「百度地图」→ com.baidu.BaiduMap）。
   const map = {
     '微信': 'com.tencent.mm',
     'qq': 'com.tencent.mobileqq',
-    '地图': 'com.baidu.BaiduMap', '百度地图': 'com.baidu.BaiduMap',
-    '高德': 'com.autonavi.minimap', '高德地图': 'com.autonavi.minimap',
+    '地图': 'com.baidu.BaiduMap',
+    '百度地图': 'com.baidu.BaiduMap',
+    '高德': 'com.autonavi.minimap',
+    '高德地图': 'com.autonavi.minimap',
     '设置': 'com.android.settings',
     '相机': 'com.android.camera',
     '淘宝': 'com.taobao.taobao',
     '支付宝': 'com.eg.android.AlipayGphone',
     '抖音': 'com.ss.android.ugc.aweme',
-    'b站': 'com.bilibili.app.in', '哔哩哔哩': 'com.bilibili.app.in',
+    'b站': 'com.bilibili.app.in',
+    '哔哩哔哩': 'com.bilibili.app.in',
     '微博': 'com.sina.weibo',
-    '网易云': 'com.netease.cloudmusic', '网易云音乐': 'com.netease.cloudmusic',
-    'chrome': 'com.android.chrome', '浏览器': 'com.android.chrome',
+    '网易云': 'com.netease.cloudmusic',
+    '网易云音乐': 'com.netease.cloudmusic',
+    'chrome': 'com.android.chrome',
+    '浏览器': 'com.android.chrome',
     '计算器': 'com.android.calculator2',
     '日历': 'com.android.calendar',
     '时钟': 'com.android.deskclock',
@@ -760,7 +803,8 @@ void registerOneBotTools() {
     toolset: 'system',
     schema: {
       'name': 'start_onebot',
-      'description': '启动 OneBot WebSocket 服务，允许 NapCatQQ 等客户端连接。默认端口 13579。启用后 QQ/微信消息会自动由 AI 回复。',
+      'description':
+          '启动 OneBot WebSocket 服务，允许 NapCatQQ 等客户端连接。默认端口 13579。启用后 QQ/微信消息会自动由 AI 回复。',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -774,7 +818,13 @@ void registerOneBotTools() {
       await dbs.DB.setConfig('onebot_port', port.toString());
       final bridge = ob.OneBotBridge();
       await bridge.stop();
-      final ok = await bridge.start(port: port);
+      final cfg = await dbs.DB.getConfig();
+      final token = await OneBotCredentials().loadOrCreateToken();
+      final ok = await bridge.start(
+        port: port,
+        accessToken: token,
+        allowInsecureLan: cfg['onebot_allow_insecure_lan'] == 'true',
+      );
       return jsonEncode({
         'success': ok,
         'port': port,

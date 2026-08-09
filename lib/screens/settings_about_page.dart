@@ -5,7 +5,6 @@ library;
 import 'dart:ui';
 import 'package:flutter/material.dart'; import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/theme_provider.dart';
-import 'webview_canvas.dart';
 
 /// 关于页面——版本信息+更新日志
 class SettingsAboutPage extends ConsumerStatefulWidget { const SettingsAboutPage({super.key}); @override ConsumerState<SettingsAboutPage> createState() => _State(); }
@@ -30,7 +29,7 @@ class _State extends ConsumerState<SettingsAboutPage> with TickerProviderStateMi
     final c = ThemeColors(ref.watch(themeProvider));
     return FadeTransition(opacity: CurvedAnimation(parent: _entry, curve: Curves.easeOut), child: Scaffold(backgroundColor: c.bgRoot,
       appBar: AppBar(backgroundColor: Colors.transparent, surfaceTintColor: Colors.transparent, title: Text('关于 Solvhen', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textPrimary))),
-      body: Stack(children: [const IgnorePointer(child: WebViewCanvas()), ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 40), children: [
+      body: Stack(children: [ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 40), children: [
         // 品牌区域
         Text('Solvhen', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: c.textPrimary, letterSpacing: -0.5)),
         Padding(padding: const EdgeInsets.only(top: 2, bottom: 24), child: Text('世于我愿 · 手机智能体', style: TextStyle(fontSize: 14, color: c.accent, fontWeight: FontWeight.w500))),

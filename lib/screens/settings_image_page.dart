@@ -6,7 +6,6 @@ library;
 import 'dart:convert'; import 'dart:ui';
 import 'package:flutter/material.dart'; import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/media_provider.dart'; import '../services/database_service.dart'; import '../theme/theme_provider.dart';
-import 'webview_canvas.dart';
 
 /// 图片生成设置页——图片模型供应商+槽位配置
 class SettingsImagePage extends ConsumerStatefulWidget { const SettingsImagePage({super.key}); @override ConsumerState<SettingsImagePage> createState() => _State(); }
@@ -46,7 +45,7 @@ class _State extends ConsumerState<SettingsImagePage> with TickerProviderStateMi
     if (!_loaded) return Container(decoration: BoxDecoration(gradient: c.bgGradient), child: const Center(child: CircularProgressIndicator(color: Color(0xFF5856D6))));
     return FadeTransition(opacity: CurvedAnimation(parent: _entry, curve: Curves.easeOut), child: Scaffold(backgroundColor: c.bgRoot,
       appBar: AppBar(backgroundColor: Colors.transparent, surfaceTintColor: Colors.transparent, title: Text('图片生成', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: c.textPrimary))),
-      body: Stack(children: [const IgnorePointer(child: WebViewCanvas()), ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 40), children: [
+      body: Stack(children: [ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 40), children: [
         _h('图片生成', c), Padding(padding: const EdgeInsets.only(top: 4, bottom: 16), child: Text('147ai / DALL-E / ComfyUI / 自定义', style: TextStyle(fontSize: 12, color: c.textTertiary))),
         ...List.generate(_slots.length, (i) => _slot(i, c)),
         const SizedBox(height: 14), _outline('添加图片模型', Icons.add_rounded, _add, c),

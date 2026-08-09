@@ -15,11 +15,17 @@ void registerProactiveTools() {
     toolset: 'system',
     schema: {
       'name': 'set_proactive',
-      'description': '设置主动消息间隔。设为0关闭。最少1分钟。',
+      'description':
+          '设置主动消息间隔。0=关闭，范围1–1440分钟。1–14分钟会启动带常驻通知的前台服务，15分钟以上使用WorkManager。',
       'parameters': {
         'type': 'object',
         'properties': {
-          'minutes': {'type': 'integer', 'description': '间隔分钟数，0=关闭，最少1'},
+          'minutes': {
+            'type': 'integer',
+            'minimum': 0,
+            'maximum': 1440,
+            'description': '间隔分钟数，0=关闭',
+          },
         },
       },
     },
@@ -32,7 +38,11 @@ void registerProactiveTools() {
       }
       final clamped = minutes.clamp(1, 1440);
       await startProactive(intervalMinutes: clamped);
-      return jsonEncode({'enabled': true, 'interval': clamped});
+      return jsonEncode({
+        'enabled': true,
+        'interval': clamped,
+        'schedule': clamped < 15 ? 'foreground_service' : 'workmanager',
+      });
     },
   ));
 
@@ -70,10 +80,12 @@ void registerProactiveTools() {
       final cfg = await dbs.DB.getConfig();
       return jsonEncode({
         'enabled': cfg['proactive_enabled'] == 'true',
-        'interval_minutes': int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30,
+        'interval_minutes':
+            int.tryParse(cfg['proactive_interval'] ?? '30') ?? 30,
         'last_tick': cfg['last_proactive_tick'],
         'last_error': cfg['last_proactive_error'],
-        'note': '定时主动发消息，最低1分钟',
+        'schedule_mode': cfg['proactive_schedule_mode'] ?? 'disabled',
+        'note': '1–14分钟=常驻前台服务；15分钟以上=WorkManager',
       });
     },
   ));

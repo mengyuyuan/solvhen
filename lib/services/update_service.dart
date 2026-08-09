@@ -5,31 +5,16 @@
 library;
 
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
-/// Update info from server.
-class UpdateInfo {
-  final String version;
-  final int versionCode;
-  final String url;
-  final String? changelog;
-  const UpdateInfo({
-    required this.version,
-    required this.versionCode,
-    required this.url,
-    this.changelog,
-  });
+import '../core/security/update_manifest.dart';
+import 'android_package_verifier.dart';
 
-  factory UpdateInfo.fromJson(Map<String, dynamic> json) => UpdateInfo(
-    version: json['version'] as String? ?? '',
-    versionCode: json['versionCode'] as int? ?? 0,
-    url: json['url'] as String? ?? '',
-    changelog: json['changelog'] as String?,
-  );
-}
+export '../core/security/update_manifest.dart';
 
 /// Check for updates from the configured OTA server.
 /// Returns [UpdateInfo] if a newer version is available, null otherwise.
@@ -37,19 +22,33 @@ Future<UpdateInfo?> checkForUpdate({
   required String updateUrl,
   required int currentVersionCode,
 }) async {
+  final baseUrl = requireOfficialUpdateBaseUrl(updateUrl);
   try {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 10),
     ));
-    final resp = await dio.get('$updateUrl/latest.json');
+    final resp = await dio.get('$baseUrl/latest.json');
     if (resp.statusCode != 200) return null;
 
-    final info = UpdateInfo.fromJson(resp.data);
+    if (resp.data is! Map) {
+      throw const FormatException('更新清单格式无效');
+    }
+    final info = UpdateInfo.fromJson(
+      Map<String, dynamic>.from(resp.data as Map),
+    );
+    info.validate();
+    if (!await verifyUpdateManifestSignature(info)) {
+      throw const FormatException('更新清单 Ed25519 签名验证失败');
+    }
     if (info.versionCode > currentVersionCode) {
       return info;
     }
     return null;
+  } on FormatException {
+    rethrow;
+  } on StateError {
+    rethrow;
   } catch (e) {
     debugPrint('[Update] check failed: $e');
     return null;
@@ -62,8 +61,12 @@ Future<String> downloadUpdate(
   UpdateInfo info, {
   void Function(double progress)? onProgress,
 }) async {
-  final dir = await getExternalStorageDirectory()
-      ?? await getApplicationDocumentsDirectory();
+  info.validate();
+  if (!await verifyUpdateManifestSignature(info)) {
+    throw const FormatException('更新清单 Ed25519 签名验证失败');
+  }
+  final dir = await getExternalStorageDirectory() ??
+      await getApplicationDocumentsDirectory();
   final file = File('${dir.path}/solvhen_update.apk');
   if (await file.exists()) await file.delete();
 
@@ -76,13 +79,51 @@ Future<String> downloadUpdate(
     },
   );
 
+  await verifyDownloadedUpdate(info, file.path, deleteOnFailure: true);
+
   return file.path;
 }
 
-/// Open the APK file with system installer.
-Future<bool> installApk(String filePath) async {
+/// Re-validates file bytes and Android package identity. This is called both
+/// after download and immediately before opening the installer to close the
+/// replace-between-check-and-use window.
+Future<void> verifyDownloadedUpdate(
+  UpdateInfo info,
+  String filePath, {
+  bool deleteOnFailure = false,
+}) async {
+  final file = File(filePath);
   try {
-    final result = await OpenFilex.open(filePath,
+    if (!await file.exists()) {
+      throw const FormatException('更新 APK 不存在');
+    }
+    final actualHash = sha256.convert(await file.readAsBytes()).toString();
+    if (actualHash.toLowerCase() != info.sha256.toLowerCase()) {
+      throw const FormatException('APK SHA-256 校验失败');
+    }
+    final identity = await AndroidPackageVerifier.verify(filePath);
+    if (identity.packageName != info.packageName) {
+      throw const FormatException('APK 实际包名与更新清单不一致');
+    }
+    if (identity.archiveCertificateSha256.toLowerCase() !=
+        info.signingCertificateSha256.toLowerCase()) {
+      throw const FormatException('APK 签名证书与更新清单不一致');
+    }
+    if (!identity.matchesInstalledCertificate) {
+      throw const FormatException('APK 签名证书与当前安装版本不一致');
+    }
+  } catch (_) {
+    if (deleteOnFailure && await file.exists()) await file.delete();
+    rethrow;
+  }
+}
+
+/// Open the APK file with system installer after a final identity check.
+Future<bool> installApk(String filePath, UpdateInfo info) async {
+  try {
+    await verifyDownloadedUpdate(info, filePath, deleteOnFailure: true);
+    final result = await OpenFilex.open(
+      filePath,
       type: 'application/vnd.android.package-archive',
     );
     return result.type == ResultType.done;

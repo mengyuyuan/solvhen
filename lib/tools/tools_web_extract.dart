@@ -46,28 +46,41 @@ void registerWebExtractTool() {
       }
       // 仅允许 http/https 协议
       if (uri.scheme != 'http' && uri.scheme != 'https') {
-        return jsonEncode({'success': false, 'error': '不支持的URL协议: ${uri.scheme}。仅支持 http/https。'});
+        return jsonEncode({
+          'success': false,
+          'error': '不支持的URL协议: ${uri.scheme}。仅支持 http/https。'
+        });
       }
       final host = uri.host.toLowerCase();
       // 阻止内部/私有 IP 地址和 .local 域名（mDNS）
-      if (host == 'localhost' || host == '127.0.0.1' || host == '0.0.0.0' ||
-          host.startsWith('127.') || host.startsWith('192.168.') ||
-          host.startsWith('10.') || host.endsWith('.local') ||
+      if (host == 'localhost' ||
+          host == '127.0.0.1' ||
+          host == '0.0.0.0' ||
+          host.startsWith('127.') ||
+          host.startsWith('192.168.') ||
+          host.startsWith('10.') ||
+          host.endsWith('.local') ||
           (host.startsWith('172.') && _isPrivate172(host))) {
         return jsonEncode({'success': false, 'error': '禁止访问内部网络地址: $host'});
       }
       try {
-        final resp = await dio.get(url,
+        final resp = await dio.get(
+          url,
           options: Options(responseType: ResponseType.plain),
         );
         final html = resp.data.toString();
         final text = _htmlToText(html);
 
         if (text.isEmpty) {
-          return jsonEncode({'success': true, 'url': url, 'content': '(页面无文本内容)', 'length': 0});
+          return jsonEncode({
+            'success': true,
+            'url': url,
+            'content': '(页面无文本内容)',
+            'length': 0
+          });
         }
 
-        final maxLen = 5000;
+        const maxLen = 5000;
         final truncated = text.length > maxLen
             ? '${text.substring(0, maxLen)}…[已截断，原文${text.length}字符]'
             : text;
@@ -91,12 +104,15 @@ String _htmlToText(String html) {
   var text = html;
 
   // 移除脚本、样式、noscript 块（连同内容）
-  text = text.replaceAll(RegExp(r'<script[^>]*>.*?</script>', dotAll: true), '');
+  text =
+      text.replaceAll(RegExp(r'<script[^>]*>.*?</script>', dotAll: true), '');
   text = text.replaceAll(RegExp(r'<style[^>]*>.*?</style>', dotAll: true), '');
-  text = text.replaceAll(RegExp(r'<noscript[^>]*>.*?</noscript>', dotAll: true), '');
+  text = text.replaceAll(
+      RegExp(r'<noscript[^>]*>.*?</noscript>', dotAll: true), '');
 
   // 块级元素替换为换行——原始正则中的 h[1-6] 是字符类，匹配 h1~h6
-  const blockTags = 'div|p|h[1-6]|li|tr|br|hr|section|article|header|footer|main|aside|nav';
+  const blockTags =
+      'div|p|h[1-6]|li|tr|br|hr|section|article|header|footer|main|aside|nav';
   text = text.replaceAll(RegExp('</?(?:$blockTags)[^>]*>'), '\n');
 
   // 移除剩余所有 HTML 标签
@@ -113,8 +129,10 @@ String _htmlToText(String html) {
       .replaceAll('&#x2F;', '/');
 
   // 解码数字实体：&#DDD; 和 &#xHHH;
-  text = text.replaceAllMapped(RegExp(r'&#(\d+);'), (m) => String.fromCharCode(int.parse(m.group(1)!)));
-  text = text.replaceAllMapped(RegExp(r'&#[xX]([0-9a-fA-F]+);'), (m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)));
+  text = text.replaceAllMapped(
+      RegExp(r'&#(\d+);'), (m) => String.fromCharCode(int.parse(m.group(1)!)));
+  text = text.replaceAllMapped(RegExp(r'&#[xX]([0-9a-fA-F]+);'),
+      (m) => String.fromCharCode(int.parse(m.group(1)!, radix: 16)));
 
   // 压缩多余空白
   text = text.replaceAll(RegExp(r'[ \t]+'), ' ');

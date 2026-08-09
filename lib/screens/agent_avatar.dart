@@ -16,8 +16,16 @@ import 'ui_controller.dart';
 
 /// 头像动画状态枚举——驱动PNG序列帧动画
 enum AgentState {
-  idle, thinking, coding, searching, reading, writing,
-  speaking, confused, celebrating, sleeping
+  idle,
+  thinking,
+  coding,
+  searching,
+  reading,
+  writing,
+  speaking,
+  confused,
+  celebrating,
+  sleeping
 }
 
 // ═══════════════════════════════════════════════
@@ -26,8 +34,12 @@ enum AgentState {
 
 /// 眨眼帧名称数组（闭眼过程的 6 帧）
 const _blinkFrames = [
-  '闭眼动画开始', '闭眼五分之一', '闭眼五分之二',
-  '闭眼五分之3', '闭眼五分之四', '闭眼五分之五',
+  '闭眼动画开始',
+  '闭眼五分之一',
+  '闭眼五分之二',
+  '闭眼五分之3',
+  '闭眼五分之四',
+  '闭眼五分之五',
 ];
 
 /// 自然眨眼参数：10 步往返，30ms/步，闭眼保持 50ms
@@ -57,15 +69,15 @@ List<int> _blinkSequence() => [0, 1, 2, 3, 4, 5, -1, 4, 3, 2, 1, 0];
 // ═══════════════════════════════════════════════
 
 class _StateConfig {
-  final Duration blinkInterval;   // 平均眨眼间隔
-  final int blinkStepMs;          // 每眨眼步时长 ms
-  final int blinkHoldMs;          // 闭眼保持时长 ms
-  final List<String> directions;  // 视线方向序列（空 = 不移动）
-  final int glanceStepMs;         // 视线切换间隔 ms
-  final bool breathing;           // 是否启用呼吸缩放
-  final double breathScale;       // 最大缩放比例 (1.0 + breathScale)
-  final int breathDurationSec;    // 完整呼吸周期秒数
-  final double? yBounce;          // 垂直弹跳幅度（像素）
+  final Duration blinkInterval; // 平均眨眼间隔
+  final int blinkStepMs; // 每眨眼步时长 ms
+  final int blinkHoldMs; // 闭眼保持时长 ms
+  final List<String> directions; // 视线方向序列（空 = 不移动）
+  final int glanceStepMs; // 视线切换间隔 ms
+  final bool breathing; // 是否启用呼吸缩放
+  final double breathScale; // 最大缩放比例 (1.0 + breathScale)
+  final int breathDurationSec; // 完整呼吸周期秒数
+  final double? yBounce; // 垂直弹跳幅度（像素）
 
   const _StateConfig({
     required this.blinkInterval,
@@ -179,13 +191,14 @@ class AgentAvatar extends StatefulWidget {
   State<AgentAvatar> createState() => _AgentAvatarState();
 }
 
-class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin {
+class _AgentAvatarState extends State<AgentAvatar>
+    with TickerProviderStateMixin {
   late AnimationController _breatheCtrl;
 
   // ── 眨眼状态 ──
   Timer? _blinkTimer;
   Timer? _blinkStepTimer;
-  int _blinkStep = -1;       // -1 = 未眨眼，显示方向图片
+  int _blinkStep = -1; // -1 = 未眨眼，显示方向图片
   bool _blinkOnHold = false; // 是否在闭眼保持阶段
 
   // ── 视线状态 ──
@@ -199,7 +212,8 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
   bool _pendingGestureCheck = false;
 
   /// 获取当前状态的动画配置，未找到时回退到 idle
-  _StateConfig get _cfg => _stateConfigs[widget.state] ?? _stateConfigs[AgentState.idle]!;
+  _StateConfig get _cfg =>
+      _stateConfigs[widget.state] ?? _stateConfigs[AgentState.idle]!;
 
   @override
   void initState() {
@@ -251,10 +265,18 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
   /// 安排下次眨眼：加上 ±30% 随机抖动，避免机械感
   void _scheduleBlink() {
     final baseMs = _cfg.blinkInterval.inMilliseconds;
-    final jitter = (baseMs * 0.3).round();
-    final delay = baseMs + math.Random().nextInt(jitter * 2) - jitter;
     _blinkTimer?.cancel();
-    _blinkTimer = Timer(Duration(milliseconds: delay.clamp(200, 30000)), _startBlink);
+    // SEARCHING intentionally uses a multi-day interval to mean "do not
+    // blink". Do not feed that sentinel into Random.nextInt (32-bit bound),
+    // and do not clamp it into an accidental 30-second blink.
+    if (baseMs >= const Duration(hours: 1).inMilliseconds) {
+      _blinkTimer = null;
+      return;
+    }
+    final factor = 0.7 + math.Random().nextDouble() * 0.6;
+    final delay = (baseMs * factor).round();
+    _blinkTimer =
+        Timer(Duration(milliseconds: delay.clamp(200, 30000)), _startBlink);
   }
 
   /// 开始眨眼动画
@@ -315,7 +337,8 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
     if (dirs.isEmpty) return;
 
     _glanceTimer?.cancel();
-    _glanceTimer = Timer.periodic(Duration(milliseconds: _cfg.glanceStepMs), (_) {
+    _glanceTimer =
+        Timer.periodic(Duration(milliseconds: _cfg.glanceStepMs), (_) {
       if (!mounted) return;
       _glanceIdx = (_glanceIdx + 1) % dirs.length;
       _currentImage = dirs[_glanceIdx];
@@ -394,28 +417,53 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
     double gScale = 1.0, gRotate = 0.0, gTranslateY = 0.0;
     if (_gestureAnimating) {
       switch (_lastGesture) {
-        case 'lean_in': gScale = 1.12; break;
-        case 'step_back': gScale = 0.94; break;
-        case 'sigh': gScale = 0.97; break;
-        case 'tilt_head': gRotate = 0.14; break;
-        case 'waiting': gRotate = -0.05; break;
-        case 'nod': gTranslateY = -5; break;
+        case 'lean_in':
+          gScale = 1.12;
+          break;
+        case 'step_back':
+          gScale = 0.94;
+          break;
+        case 'sigh':
+          gScale = 0.97;
+          break;
+        case 'tilt_head':
+          gRotate = 0.14;
+          break;
+        case 'waiting':
+          gRotate = -0.05;
+          break;
+        case 'nod':
+          gTranslateY = -5;
+          break;
       }
     }
 
-    final hasMotion = _cfg.breathing || _cfg.yBounce != null || _gestureAnimating;
+    final hasMotion =
+        _cfg.breathing || _cfg.yBounce != null || _gestureAnimating;
 
-    // 基础头像图片，加载失败时回退到正脸
+    // 头像源图为 1254px。按实际显示像素解码，避免 20/32px 小头像的
+    // 每一帧都占用数 MB GPU 内存；gaplessPlayback 在换帧期间保留上一帧，
+    // 防止 Android 上短暂出现灰色占位块。
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final cacheSize = (widget.size * devicePixelRatio).ceil().clamp(24, 320);
     Widget avatar = Image.asset(
-      'assets/avatars/${_displayImage}.png',
+      'assets/avatars/$_displayImage.png',
       width: widget.size,
       height: widget.size,
+      cacheWidth: cacheSize,
+      cacheHeight: cacheSize,
       fit: BoxFit.contain,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
       errorBuilder: (_, __, ___) => Image.asset(
         'assets/avatars/正.png',
         width: widget.size,
         height: widget.size,
+        cacheWidth: cacheSize,
+        cacheHeight: cacheSize,
         fit: BoxFit.contain,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
       ),
     );
 
@@ -425,7 +473,9 @@ class _AgentAvatarState extends State<AgentAvatar> with TickerProviderStateMixin
         animation: _breatheCtrl,
         builder: (_, child) {
           final t = _breatheCtrl.value;
-          final s = _cfg.breathing ? 1.0 + math.sin(t * 2 * math.pi) * _cfg.breathScale : 1.0;
+          final s = _cfg.breathing
+              ? 1.0 + math.sin(t * 2 * math.pi) * _cfg.breathScale
+              : 1.0;
           final bounceY = _cfg.yBounce != null
               ? math.sin(t * 2 * math.pi) * _cfg.yBounce!
               : 0.0;

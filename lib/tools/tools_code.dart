@@ -11,12 +11,14 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'tool_registry.dart';
 import '../services/database_service.dart';
+import '../core/security/developer_mode.dart';
+import '../core/security/tool_security.dart';
 
 /// 注册代码执行工具
-/// 
+///
 /// run_code：执行 Dart 代码，内置 tool() 函数可调用所有系统工具
 /// ⚠️ 代码在主线程执行，5秒超时防卡死
-/// 
+///
 /// 可用函数：
 ///   print(x)          — 输出结果
 ///   tool(name, args)  — 调用任意系统工具（如 tool('get_clipboard', {})）
@@ -25,7 +27,7 @@ import '../services/database_service.dart';
 void registerCodeTool() {
   final registry = ToolRegistry();
 
-  // ── run_code — 执行代码，有系统权限 ──
+  // ── run_code — 受限 DSL；每个嵌套工具仍单独通过策略引擎 ──
   registry.register(ToolEntry(
     name: 'run_code',
     toolset: 'code',
@@ -33,7 +35,7 @@ void registerCodeTool() {
       'name': 'run_code',
       'description': '''执行 Dart 代码。代码中可以用以下函数：
 
-tool('工具名', {参数}) — ⭐ 调用系统工具。所有系统操作必须通过 tool() 调用，它有完整的 Android 权限！
+tool('工具名', {参数}) — 调用已注册工具。每次嵌套调用都会重新经过来源、能力、风险与用户确认策略，脚本不能绕过权限。
   - 剪切板：tool('get_clipboard', {}) / tool('set_clipboard', {'text': '...'})
   - 应用：tool('list_installed_apps', {'filter': '微信'}) / tool('open_app', {'name': '微信'})
   - 闪光灯：tool('toggle_flashlight', {'enable': true/false})
@@ -67,10 +69,22 @@ print(x) — 输出结果。可以有多个 print()。
         'required': ['code'],
       },
     },
+    risk: ToolRisk.destructive,
+    capabilities: const {'code'},
+    supportedOrigins: const {ExecutionOrigin.localUser},
     handler: (args) async {
       final code = args['code'] as String;
       try {
         final result = await _runWithTools(code, registry);
+        return jsonEncode({'success': true, 'output': result});
+      } catch (e) {
+        return jsonEncode({'success': false, 'error': e.toString()});
+      }
+    },
+    contextualHandler: (args, context) async {
+      final code = args['code'] as String;
+      try {
+        final result = await _runWithTools(code, registry, context: context);
         return jsonEncode({'success': true, 'output': result});
       } catch (e) {
         return jsonEncode({'success': false, 'error': e.toString()});
@@ -84,10 +98,9 @@ print(x) — 输出结果。可以有多个 print()。
     toolset: 'code',
     schema: {
       'name': 'rebuild_self',
-      'description': '''重新编译并安装自己。改完 .dart 源文件后调用。
+      'description': '''通过已配对的局域网开发服务器重新编译并安装自己。
 
-本地模式（桌面/模拟器）：直接运行 flutter build + adb install（~12秒）。
-远程模式（真机）：通过 dev_server_url 触发开发机编译安装。
+仅在用户显式开启开发者模式后出现；服务器地址必须是回环或私网地址，请求必须携带 Keystore 中的 256 位 token 和一次性 nonce，并且每次调用都由用户确认。
 
 不需要参数。''',
       'parameters': {
@@ -96,35 +109,12 @@ print(x) — 输出结果。可以有多个 print()。
         'required': [],
       },
     },
-    handler: (args) async {
-      try {
-        final flutterResult = await Process.run(
-          'flutter', ['build', 'apk', '--debug'],
-          runInShell: true,
-        );
-        if (flutterResult.exitCode != 0) {
-          return await _rebuildViaHttp();
-        }
-        final apkPath = 'build/app/outputs/flutter-apk/app-debug.apk';
-        final installResult = await Process.run(
-          'adb', ['install', '-r', apkPath],
-          runInShell: true,
-        );
-        if (installResult.exitCode == 0) {
-          return jsonEncode({
-            'rebuilt': true,
-            'message': '编译安装成功。重启App即可看到新效果。',
-          });
-        }
-        return jsonEncode({
-          'rebuilt': false,
-          'error': '安装失败: ${installResult.stderr}',
-          'hint': '可以手动安装: adb install -r $apkPath',
-        });
-      } catch (e) {
-        return await _rebuildViaHttp();
-      }
-    },
+    checkFn: () => DeveloperModeSession.instance.enabled,
+    risk: ToolRisk.destructive,
+    capabilities: const {'code'},
+    supportedOrigins: const {ExecutionOrigin.localUser},
+    handler: (_) => _rebuildViaHttp(),
+    contextualHandler: (_, context) => _rebuildViaHttp(context: context),
   ));
 }
 
@@ -132,8 +122,30 @@ print(x) — 输出结果。可以有多个 print()。
 // 动态工具注册 — AI可以运行时给自己加新工具
 // ═══════════════════════════════════════════════════════════════
 
-/// AI动态注册的工具的handler代码存储
-final _dynamicHandlers = <String, String>{};
+class _DynamicToolDefinition {
+  const _DynamicToolDefinition({
+    required this.code,
+    required this.capabilities,
+  });
+
+  final String code;
+  final Set<String> capabilities;
+}
+
+/// Dynamic tools are process-local. Their source is kept for the permission
+/// preview and diagnostics; it is never compiled or evaluated as native Dart.
+final _dynamicHandlers = <String, _DynamicToolDefinition>{};
+
+const _dynamicCapabilityAllowlist = <String>{
+  'file',
+  'system',
+  'web',
+  'memory',
+  'history',
+  'ui',
+  'model',
+  'proactive',
+};
 
 /// 注册动态工具管理工具——AI可以运行时给自己增加/删除工具
 void registerDynamicTools() {
@@ -147,10 +159,8 @@ void registerDynamicTools() {
       'name': 'register_tool',
       'description': '''注册一个新的运行时工具。注册后立即可用。
 
-这是你扩展自己工具集的终极方式。当你发现：
-- 现有工具组合不够用，需要一个专门的新工具
-- 某个操作需要多步工具调用，封装成一个工具更高效
-- 想给自己加一个快捷工具
+动态工具只支持受限 DSL，不会执行原生 Dart。注册前必须声明能力；
+用户会看到名称、能力和完整 handler_code，并决定是否允许。
 
 handler_code 是你写的脚本代码，被调用时执行。参数通过变量注入：
   如果工具定义 parameters: {name: string, count: number}
@@ -160,10 +170,11 @@ handler_code 是你写的脚本代码，被调用时执行。参数通过变量�
   name: send_message
   description: 发送消息到指定应用
   parameters: {"type":"object","properties":{"app":{"type":"string"},"text":{"type":"string"}},"required":["app","text"]}
+  capabilities: [system]
   handler_code: |
     tool('open_app', {'name': app});
     tool('set_clipboard', {'text': text});
-    print('已打开' + app + '，消息已复制到剪切板');''',
+    print('操作完成');''',
       'parameters': {
         'type': 'object',
         'properties': {
@@ -177,56 +188,38 @@ handler_code 是你写的脚本代码，被调用时执行。参数通过变量�
           },
           'parameters': {
             'type': 'object',
-            'description': 'OpenAI function calling 格式的参数schema，如 {"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}',
+            'description':
+                'OpenAI function calling 格式的参数schema，如 {"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}',
           },
           'handler_code': {
             'type': 'string',
-            'description': '工具被调用时执行的代码。用 tool("工具名", {参数}) 调系统工具。参数通过变量传入。',
+            'description':
+                '受限 DSL。仅支持 tool(...)、接收工具结果、print(字面量)和简单数学表达式；最多 60 行。',
+          },
+          'capabilities': {
+            'type': 'array',
+            'items': {
+              'type': 'string',
+              'enum': _dynamicCapabilityAllowlist.toList(),
+            },
+            'description': '该工具允许调用的能力，必须覆盖 handler_code 中每个嵌套工具。',
           },
         },
-        'required': ['name', 'description', 'parameters', 'handler_code'],
+        'required': [
+          'name',
+          'description',
+          'parameters',
+          'handler_code',
+          'capabilities',
+        ],
       },
     },
-    handler: (args) async {
-      try {
-        final name = args['name'] as String;
-        final desc = args['description'] as String;
-        final params = args['parameters'] as Map<String, dynamic>;
-        final handlerCode = args['handler_code'] as String;
-
-        // 存储handler代码
-        _dynamicHandlers[name] = handlerCode;
-
-        // 注册到ToolRegistry
-        registry.register(ToolEntry(
-          name: name,
-          toolset: 'dynamic',
-          schema: {
-            'name': name,
-            'description': desc,
-            'parameters': params,
-          },
-          handler: (callArgs) => _dynamicToolHandler(callArgs, handlerCode),
-        ));
-
-        // 同时保存到DB技能表作为备份
-        try {
-          await DB.addSkill(
-            'tool_$name',
-            '动态工具: $name\n$desc\n\nHandler:\n$handlerCode',
-            priority: 60,
-          );
-        } catch (_) {}
-
-        return jsonEncode({
-          'registered': true,
-          'name': name,
-          'message': '工具「$name」已注册，立即可用。重启后需重新注册（或从技能恢复）。',
-        });
-      } catch (e) {
-        return jsonEncode({'error': '注册工具失败: $e'});
-      }
-    },
+    risk: ToolRisk.destructive,
+    capabilities: const {'code'},
+    supportedOrigins: const {ExecutionOrigin.localUser},
+    handler: (args) => _registerDynamicTool(args, registry),
+    contextualHandler: (args, context) =>
+        _registerDynamicTool(args, registry, context: context),
   ));
 
   // ── unregister_tool — 移除一个动态注册的工具 ──
@@ -244,12 +237,19 @@ handler_code 是你写的脚本代码，被调用时执行。参数通过变量�
         'required': ['name'],
       },
     },
+    risk: ToolRisk.destructive,
+    capabilities: const {'code'},
+    supportedOrigins: const {ExecutionOrigin.localUser},
     handler: (args) async {
       final name = args['name'] as String;
       // 不允许移除系统核心工具
       const coreTools = {
-        'run_code', 'register_tool', 'unregister_tool', 'list_my_tools',
-        'rebuild_self', 'add_capability',
+        'run_code',
+        'register_tool',
+        'unregister_tool',
+        'list_my_tools',
+        'rebuild_self',
+        'add_capability',
       };
       if (coreTools.contains(name)) {
         return jsonEncode({'error': '不能移除核心工具: $name'});
@@ -282,7 +282,8 @@ handler_code 是你写的脚本代码，被调用时执行。参数通过变量�
         final entry = registry[e.key];
         tools[e.key] = {
           'description': entry?.schema['description'] ?? '',
-          'handler_lines': e.value.split('\n').length,
+          'handler_lines': e.value.code.split('\n').length,
+          'capabilities': e.value.capabilities.toList()..sort(),
         };
       }
       return jsonEncode({'tools': tools, 'count': tools.length});
@@ -290,22 +291,175 @@ handler_code 是你写的脚本代码，被调用时执行。参数通过变量�
   ));
 }
 
-/// 动态工具的handler——执行AI存储的代码
-/// 把调用参数注入为变量，然后执行handler中的代码
-Future<String> _dynamicToolHandler(Map<String, dynamic> args, String handlerCode) async {
-  final buf = StringBuffer();
-  for (final e in args.entries) {
-    final val = e.value;
-    if (val is String) {
-      buf.writeln("var ${e.key} = '$val';");
-    } else if (val is num || val is bool) {
-      buf.writeln("var ${e.key} = $val;");
-    } else {
-      buf.writeln("var ${e.key} = '$val';");
+Future<String> _registerDynamicTool(
+  Map<String, dynamic> args,
+  ToolRegistry registry, {
+  ToolContext? context,
+}) async {
+  try {
+    context?.cancellation.throwIfCancelled();
+    final name = (args['name'] as String? ?? '').trim();
+    final description = (args['description'] as String? ?? '').trim();
+    final rawParameters = args['parameters'];
+    final parameters = rawParameters is Map
+        ? Map<String, dynamic>.from(rawParameters)
+        : <String, dynamic>{};
+    final code = (args['handler_code'] as String? ?? '').trim();
+    final rawCapabilities = args['capabilities'];
+    final capabilities = rawCapabilities is List
+        ? rawCapabilities
+            .map((item) => '$item'.trim())
+            .where((e) => e.isNotEmpty)
+            .toSet()
+        : <String>{};
+
+    final validation = _validateDynamicTool(
+      name: name,
+      description: description,
+      parameters: parameters,
+      code: code,
+      capabilities: capabilities,
+      registry: registry,
+    );
+    if (validation != null) {
+      return jsonEncode({'registered': false, 'error': validation});
+    }
+
+    final definition = _DynamicToolDefinition(
+      code: code,
+      capabilities: Set.unmodifiable(capabilities),
+    );
+    _dynamicHandlers[name] = definition;
+    registry.register(ToolEntry(
+      name: name,
+      toolset: 'dynamic',
+      schema: {
+        'name': name,
+        'description': description,
+        'parameters': parameters,
+      },
+      risk: ToolRisk.destructive,
+      capabilities: {'code', ...capabilities},
+      supportedOrigins: const {ExecutionOrigin.localUser},
+      handler: (callArgs) => _dynamicToolHandler(callArgs, definition),
+      contextualHandler: (callArgs, nestedContext) =>
+          _dynamicToolHandler(callArgs, definition, context: nestedContext),
+    ));
+
+    try {
+      final sortedCapabilities = capabilities.toList()..sort();
+      await DB.addSkill(
+        'tool_$name',
+        '动态工具: $name\n$description\n'
+            '能力: ${sortedCapabilities.join(', ')}\n\nHandler:\n$code',
+        priority: 60,
+      );
+    } catch (_) {
+      // The in-memory registration remains usable; DB backup is best effort.
+    }
+
+    return jsonEncode({
+      'registered': true,
+      'name': name,
+      'capabilities': capabilities.toList()..sort(),
+      'message': '工具「$name」已注册。它只在当前进程有效，且每次调用仍会经过策略与确认。',
+    });
+  } catch (error) {
+    return jsonEncode({'registered': false, 'error': '注册工具失败: $error'});
+  }
+}
+
+String? _validateDynamicTool({
+  required String name,
+  required String description,
+  required Map<String, dynamic> parameters,
+  required String code,
+  required Set<String> capabilities,
+  required ToolRegistry registry,
+}) {
+  if (!RegExp(r'^[a-z][a-z0-9_]{2,47}$').hasMatch(name)) {
+    return '工具名必须是 3–48 位小写英文、数字或下划线，并以字母开头';
+  }
+  if (registry.contains(name)) return '工具名已存在；请先移除旧动态工具，不能覆盖内置工具';
+  if (description.isEmpty || description.length > 300) {
+    return '描述长度必须为 1–300 字符';
+  }
+  if (code.isEmpty || code.length > 4000 || code.split('\n').length > 60) {
+    return 'handler_code 必须为 1–4000 字符且不超过 60 行';
+  }
+  if (!capabilities.every(_dynamicCapabilityAllowlist.contains)) {
+    return '包含不受支持的能力声明';
+  }
+  if (parameters['type'] != 'object' || parameters['properties'] is! Map) {
+    return 'parameters 必须是 type=object 的函数参数 schema';
+  }
+
+  final propertyNames = (parameters['properties'] as Map).keys.map((e) => '$e');
+  if (propertyNames.any(
+      (name) => !RegExp(r'^[A-Za-z_][A-Za-z0-9_]{0,47}$').hasMatch(name))) {
+    return '参数名格式无效';
+  }
+
+  final directTool =
+      RegExp(r"^tool\('[a-z][a-z0-9_]*'\s*,\s*\{[^{}]*\}\);?\s*$");
+  final assignedTool = RegExp(
+    r"^(?:var\s+|final\s+|String\s+|dynamic\s+)?[A-Za-z_]\w*\s*=\s*tool\('[a-z][a-z0-9_]*'\s*,\s*\{[^{}]*\}\);?\s*$",
+  );
+  final printLiteral = RegExp(r'''^print\((?:'[^']*'|"[^"]*")\);?\s*$''');
+  final expression = RegExp(r'^[\d\s+\-*/().]+;?\s*$');
+
+  for (final rawLine in code.split('\n')) {
+    final line = rawLine.trim();
+    if (line.isEmpty) continue;
+    if (!directTool.hasMatch(line) &&
+        !assignedTool.hasMatch(line) &&
+        !printLiteral.hasMatch(line) &&
+        !expression.hasMatch(line) &&
+        line != 'DateTime.now();' &&
+        line != 'DateTime.now()') {
+      return 'DSL 不支持这一行：${line.length > 80 ? '${line.substring(0, 80)}…' : line}';
     }
   }
-  buf.write(handlerCode);
-  return _runWithTools(buf.toString(), ToolRegistry());
+
+  for (final toolName in _extractNestedToolNames(code)) {
+    final entry = registry[toolName];
+    if (entry == null) return 'handler_code 引用了未知工具：$toolName';
+    if (entry.toolset == 'code' ||
+        entry.toolset == 'dynamic' ||
+        entry.toolset == 'delegation') {
+      return '动态工具不能调用代码、动态工具或子 Agent：$toolName';
+    }
+    final missing = entry.effectiveCapabilities.difference(capabilities);
+    if (missing.isNotEmpty) {
+      return '工具 $toolName 需要先声明能力：${missing.join(', ')}';
+    }
+  }
+  return null;
+}
+
+Set<String> _extractNestedToolNames(String code) => RegExp(
+      r"tool\('([a-z][a-z0-9_]*)'\s*,",
+    ).allMatches(code).map((match) => match.group(1)!).toSet();
+
+/// 动态工具的handler——执行AI存储的代码
+/// 把调用参数注入为变量，然后执行handler中的代码
+Future<String> _dynamicToolHandler(
+  Map<String, dynamic> args,
+  _DynamicToolDefinition definition, {
+  ToolContext? context,
+}) async {
+  final dynamicContext = context?.asOrigin(
+    ExecutionOrigin.dynamicTool,
+    parent: 'dynamic_tool',
+  );
+  return _runWithTools(
+    definition.code,
+    ToolRegistry(),
+    context: dynamicContext,
+    variables: args,
+    allowedCapabilities: definition.capabilities,
+    forbidPrivilegedTools: true,
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -314,7 +468,14 @@ Future<String> _dynamicToolHandler(Map<String, dynamic> args, String handlerCode
 
 /// 在主线程执行代码，注入 tool() 函数让脚本可以调用所有系统工具。
 /// 5秒超时保护，超时抛异常。
-Future<String> _runWithTools(String code, ToolRegistry registry) async {
+Future<String> _runWithTools(
+  String code,
+  ToolRegistry registry, {
+  ToolContext? context,
+  Map<String, dynamic> variables = const {},
+  Set<String>? allowedCapabilities,
+  bool forbidPrivilegedTools = false,
+}) async {
   final output = StringBuffer();
   final stopwatch = Stopwatch()..start();
 
@@ -324,7 +485,28 @@ Future<String> _runWithTools(String code, ToolRegistry registry) async {
       throw TimeoutException('代码执行超时(5秒)');
     }
     try {
-      final result = await registry.dispatch(name, args);
+      context?.cancellation.throwIfCancelled();
+      final entry = registry[name];
+      if (entry == null) return 'ERROR: unknown tool: $name';
+      if (forbidPrivilegedTools &&
+          (entry.toolset == 'code' ||
+              entry.toolset == 'dynamic' ||
+              entry.toolset == 'delegation')) {
+        return 'ERROR: privileged nested tool denied: $name';
+      }
+      if (allowedCapabilities != null) {
+        final missing =
+            entry.effectiveCapabilities.difference(allowedCapabilities);
+        if (missing.isNotEmpty) {
+          return 'ERROR: undeclared capabilities for $name: ${missing.join(', ')}';
+        }
+      }
+      final result = await registry.dispatch(
+        name,
+        args,
+        context: context?.nested(name),
+        onApproval: context?.approval,
+      );
       return result;
     } catch (e) {
       return 'ERROR: ${e.toString().length > 200 ? e.toString().substring(0, 200) : e}';
@@ -354,15 +536,15 @@ Future<String> _runWithTools(String code, ToolRegistry registry) async {
 
     // —— var x = tool('name', {...}) ——
     final varToolMatch = RegExp(
-      r"^(?:var\s+|final\s+|String\s+|dynamic\s+)?(\w+)\s*=\s*tool\('([^']+)'\s*,\s*(\{[^}]*\})\);?\s*$"
-    ).firstMatch(line);
+            r"^(?:var\s+|final\s+|String\s+|dynamic\s+)?(\w+)\s*=\s*tool\('([^']+)'\s*,\s*(\{[^}]*\})\);?\s*$")
+        .firstMatch(line);
     if (varToolMatch != null) {
       final toolName = varToolMatch.group(2)!;
       final argsStr = varToolMatch.group(3)!;
       Map<String, dynamic> toolArgs;
       try {
         // 简单JSON解析 — 支持 {key: value, key2: 'value2'} 格式
-        toolArgs = _parseSimpleJson(argsStr);
+        toolArgs = _parseSimpleJson(argsStr, variables: variables);
       } catch (_) {
         toolArgs = {};
       }
@@ -388,15 +570,14 @@ Future<String> _runWithTools(String code, ToolRegistry registry) async {
     }
 
     // —— tool('name', {...}) 直接调用（无赋值） ——
-    final toolMatch = RegExp(
-      r"^tool\('([^']+)'\s*,\s*(\{[^}]*\})\);?\s*$"
-    ).firstMatch(line);
+    final toolMatch =
+        RegExp(r"^tool\('([^']+)'\s*,\s*(\{[^}]*\})\);?\s*$").firstMatch(line);
     if (toolMatch != null) {
       final toolName = toolMatch.group(1)!;
       final argsStr = toolMatch.group(2)!;
       Map<String, dynamic> toolArgs;
       try {
-        toolArgs = _parseSimpleJson(argsStr);
+        toolArgs = _parseSimpleJson(argsStr, variables: variables);
       } catch (_) {
         toolArgs = {};
       }
@@ -405,18 +586,24 @@ Future<String> _runWithTools(String code, ToolRegistry registry) async {
       try {
         final parsed = jsonDecode(result);
         if (parsed is Map) {
-          output.writeln(parsed['value']?.toString() ?? parsed['output']?.toString() ?? parsed['message']?.toString() ?? 'ok');
+          output.writeln(parsed['value']?.toString() ??
+              parsed['output']?.toString() ??
+              parsed['message']?.toString() ??
+              'ok');
         } else {
-          output.writeln(result.length > 200 ? '${result.substring(0, 200)}...' : result);
+          output.writeln(
+              result.length > 200 ? '${result.substring(0, 200)}...' : result);
         }
       } catch (_) {
-        output.writeln(result.length > 200 ? '${result.substring(0, 200)}...' : result);
+        output.writeln(
+            result.length > 200 ? '${result.substring(0, 200)}...' : result);
       }
       continue;
     }
 
     // —— 纯表达式求值 ——
-    if (RegExp(r'^[\d\s+\-*/().\w]+$').hasMatch(line) || line.contains('DateTime.now()')) {
+    if (RegExp(r'^[\d\s+\-*/().\w]+$').hasMatch(line) ||
+        line.contains('DateTime.now()')) {
       try {
         final val = _evalExpression(line);
         output.writeln(val);
@@ -439,7 +626,10 @@ Future<String> _runWithTools(String code, ToolRegistry registry) async {
 }
 
 /// 简单 JSON 解析 — 处理 {key: value, key2: 'value2'} 格式
-Map<String, dynamic> _parseSimpleJson(String s) {
+Map<String, dynamic> _parseSimpleJson(
+  String s, {
+  Map<String, dynamic> variables = const {},
+}) {
   final map = <String, dynamic>{};
   // 去掉首尾大括号
   var inner = s.trim();
@@ -452,12 +642,21 @@ Map<String, dynamic> _parseSimpleJson(String s) {
   for (final part in parts) {
     final colonIdx = part.indexOf(':');
     if (colonIdx < 0) continue;
-    final key = part.substring(0, colonIdx).trim();
+    var key = part.substring(0, colonIdx).trim();
     var value = part.substring(colonIdx + 1).trim();
+    if ((key.startsWith("'") && key.endsWith("'")) ||
+        (key.startsWith('"') && key.endsWith('"'))) {
+      key = key.substring(1, key.length - 1);
+    }
     // 去引号
-    if ((value.startsWith("'") && value.endsWith("'")) ||
-        (value.startsWith('"') && value.endsWith('"'))) {
+    final quoted = (value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith('"') && value.endsWith('"'));
+    if (quoted) {
       value = value.substring(1, value.length - 1);
+    }
+    if (!quoted && variables.containsKey(value)) {
+      map[key] = variables[value];
+      continue;
     }
     // 布尔
     if (value == 'true') {
@@ -477,45 +676,84 @@ Map<String, dynamic> _parseSimpleJson(String s) {
 // 远程编译
 // ═══════════════════════════════════════════════════════════════
 
-Future<String> _rebuildViaHttp() async {
+Future<String> _rebuildViaHttp({ToolContext? context}) async {
   try {
-    final config = await DB.getConfig();
-    final devUrl = config['dev_server_url'] ?? '';
-    if (devUrl.isEmpty) {
+    if (!DeveloperModeSession.instance.enabled) {
       return jsonEncode({
         'rebuilt': false,
-        'message': '真机上无法直接编译。请配置 dev_server_url 指向开发机，'
-            '或手动运行: flutter build apk --debug && adb install -r',
-        'hint': '设置 dev_server_url = http://192.168.0.110:9120',
+        'error': '开发者模式未开启，rebuild_self 不可用',
       });
     }
+    context?.cancellation.throwIfCancelled();
+    final config = await DB.getConfig();
+    final baseUrl = normalizePrivateDeveloperUrl(config['dev_server_url']);
+    if (baseUrl == null) {
+      return jsonEncode({
+        'rebuilt': false,
+        'error': '开发服务器地址无效；只允许 localhost、回环地址或私网 IP，且不能包含账号、查询参数或片段',
+      });
+    }
+    final token = await DeveloperCredentials().readToken();
+    if (token == null || token.length < 32) {
+      return jsonEncode({
+        'rebuilt': false,
+        'error': '尚未生成 256 位开发服务器 token，请先在开发者设置中配对',
+      });
+    }
+    context?.cancellation.throwIfCancelled();
+
     final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 5);
+    final cancelFuture = context?.cancellation.whenCancelled.then((_) {
+      client.close(force: true);
+    });
+    if (cancelFuture != null) unawaited(cancelFuture);
     try {
-      final request = await client.postUrl(Uri.parse('$devUrl/rebuild'));
+      final endpoint = baseUrl.replace(path: '${baseUrl.path}/rebuild');
+      final request = await client.postUrl(endpoint).timeout(
+            const Duration(seconds: 8),
+          );
       request.headers.set('Content-Type', 'application/json');
+      request.headers.set('Authorization', 'Bearer $token');
+      request.headers.set('X-Solvhen-Nonce', _randomNonce());
       request.write(jsonEncode({'action': 'rebuild'}));
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
-      if (response.statusCode == 200) {
+      final response =
+          await request.close().timeout(const Duration(seconds: 8));
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(minutes: 6));
+      context?.cancellation.throwIfCancelled();
+      final decoded = jsonDecode(body);
+      final result = decoded is Map ? decoded : const <String, dynamic>{};
+      if (response.statusCode == 200 && result['rebuilt'] == true) {
         return jsonEncode({
           'rebuilt': true,
-          'message': '远程编译成功！${jsonDecode(body)['message'] ?? ''}',
+          'message': '远程编译安装成功。${result['message'] ?? ''}',
         });
       }
       return jsonEncode({
         'rebuilt': false,
-        'error': '编译服务返回 ${response.statusCode}: $body',
+        'error': '编译服务返回 ${response.statusCode}: '
+            '${result['error'] ?? '请求未完成'}',
       });
     } finally {
-      client.close();
+      client.close(force: true);
     }
   } catch (e) {
     return jsonEncode({
       'rebuilt': false,
-      'error': '编译服务不可达: ${e.toString().length > 100 ? e.toString().substring(0, 100) : e}',
-      'hint': '确认 dev_server_url 正确且开发机上的 rebuild_server.py 在运行',
+      'error':
+          '编译服务不可达: ${e.toString().length > 100 ? e.toString().substring(0, 100) : e}',
+      'hint': '确认开发者模式、私网地址、Bearer token、客户端 IP 白名单和 rebuild_server.py 配置一致',
     });
   }
+}
+
+String _randomNonce() {
+  final random = math.Random.secure();
+  final bytes = List<int>.generate(24, (_) => random.nextInt(256));
+  return base64UrlEncode(bytes).replaceAll('=', '');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -575,13 +813,20 @@ String _evalSimple(String expr) {
       final a = _parseNested(argStr);
       if (a == null) return '计算错误';
       switch (funcName) {
-        case 'sqrt': return a < 0 ? 'Error' : math.sqrt(a).toString();
-        case 'sin': return math.sin(a).toString();
-        case 'cos': return math.cos(a).toString();
-        case 'abs': return a.abs().toString();
-        case 'round': return a.round().toString();
-        case 'floor': return a.floorToDouble().toString();
-        case 'ceil': return a.ceilToDouble().toString();
+        case 'sqrt':
+          return a < 0 ? 'Error' : math.sqrt(a).toString();
+        case 'sin':
+          return math.sin(a).toString();
+        case 'cos':
+          return math.cos(a).toString();
+        case 'abs':
+          return a.abs().toString();
+        case 'round':
+          return a.round().toString();
+        case 'floor':
+          return a.floorToDouble().toString();
+        case 'ceil':
+          return a.ceilToDouble().toString();
       }
     } catch (_) {
       return 'Error: invalid function arguments';
@@ -596,10 +841,14 @@ String _evalSimple(String expr) {
     final op = arithMatch.group(2)!;
     final b = double.parse(arithMatch.group(3)!);
     switch (op) {
-      case '+': return (a + b).toString();
-      case '-': return (a - b).toString();
-      case '*': return (a * b).toString();
-      case '/': return b != 0 ? (a / b).toString() : 'Error: division by zero';
+      case '+':
+        return (a + b).toString();
+      case '-':
+        return (a - b).toString();
+      case '*':
+        return (a * b).toString();
+      case '/':
+        return b != 0 ? (a / b).toString() : 'Error: division by zero';
     }
   }
 
@@ -614,7 +863,8 @@ double? _parseNested(String expr) {
   final num = double.tryParse(expr);
   if (num != null) return num;
 
-  final nestedRe = RegExp(r'^(sqrt|sin|cos|abs|round|floor|ceil|pow)\((.+?)\)$');
+  final nestedRe =
+      RegExp(r'^(sqrt|sin|cos|abs|round|floor|ceil|pow)\((.+?)\)$');
   final m = nestedRe.firstMatch(expr);
   if (m != null) {
     final funcName = m.group(1)!;
@@ -630,13 +880,20 @@ double? _parseNested(String expr) {
     final a = _parseNested(argStr);
     if (a == null) return null;
     switch (funcName) {
-      case 'sqrt': return a < 0 ? null : math.sqrt(a);
-      case 'sin': return math.sin(a);
-      case 'cos': return math.cos(a);
-      case 'abs': return a.abs();
-      case 'round': return a.round().toDouble();
-      case 'floor': return a.floorToDouble();
-      case 'ceil': return a.ceilToDouble();
+      case 'sqrt':
+        return a < 0 ? null : math.sqrt(a);
+      case 'sin':
+        return math.sin(a);
+      case 'cos':
+        return math.cos(a);
+      case 'abs':
+        return a.abs();
+      case 'round':
+        return a.round().toDouble();
+      case 'floor':
+        return a.floorToDouble();
+      case 'ceil':
+        return a.ceilToDouble();
     }
   }
   return null;

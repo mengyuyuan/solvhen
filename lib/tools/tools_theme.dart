@@ -44,7 +44,10 @@ void registerThemeTools() {
           'error': ok ? null : '无法解析颜色 "$color"',
         });
       } catch (e) {
-        return jsonEncode({'success': false, 'error': '设置失败: ${e.toString().substring(0, 80)}'});
+        return jsonEncode({
+          'success': false,
+          'error': '设置失败: ${e.toString().substring(0, 80)}'
+        });
       }
     },
   ));
@@ -59,7 +62,10 @@ void registerThemeTools() {
       'parameters': {
         'type': 'object',
         'properties': {
-          'mode': {'type': 'string', 'enum': ['light', 'dark']},
+          'mode': {
+            'type': 'string',
+            'enum': ['light', 'dark']
+          },
         },
         'required': ['mode'],
       }
@@ -77,12 +83,17 @@ void registerThemeTools() {
     toolset: 'theme',
     schema: {
       'name': 'set_bubble_color',
-      'description': '修改气泡颜色。target: "me"(对方气泡) | "self"(自己气泡) | 不传默认改自己的。支持颜色名或十六进制如 pink/#FF69B4。"reset" 恢复默认。',
+      'description':
+          '修改气泡颜色。target: "me"(对方气泡) | "self"(自己气泡) | 不传默认改自己的。支持颜色名或十六进制如 pink/#FF69B4。"reset" 恢复默认。',
       'parameters': {
         'type': 'object',
         'properties': {
           'color': {'type': 'string', 'description': '颜色名/#RRGGBB，reset=恢复默认'},
-          'target': {'type': 'string', 'enum': ['self', 'me'], 'description': 'self=自己的气泡, me=对方的气泡。默认self。'},
+          'target': {
+            'type': 'string',
+            'enum': ['self', 'me'],
+            'description': 'self=自己的气泡, me=对方的气泡。默认self。'
+          },
         },
         'required': ['color'],
       }
@@ -99,7 +110,8 @@ void registerThemeTools() {
           } else {
             ui.setBubbleColor(null);
           }
-          return jsonEncode({'success': true, 'mode': 'reset', 'target': target});
+          return jsonEncode(
+              {'success': true, 'mode': 'reset', 'target': target});
         }
         final color = _parseColor(colorStr);
         if (color == null) {
@@ -110,9 +122,11 @@ void registerThemeTools() {
         } else {
           ui.setBubbleColor(color);
         }
-        return jsonEncode({'success': true, 'color': colorStr, 'target': target});
+        return jsonEncode(
+            {'success': true, 'color': colorStr, 'target': target});
       } catch (e) {
-        return jsonEncode({'success': false, 'error': e.toString().substring(0, 80)});
+        return jsonEncode(
+            {'success': false, 'error': e.toString().substring(0, 80)});
       }
     },
   ));
@@ -134,11 +148,21 @@ Color? _parseColor(String s) {
   } catch (_) {
     // hex 解析失败 → 查颜色名称映射表
     const named = {
-      'pink': 0xFFFF69B4, 'red': 0xFFFF0000, 'orange': 0xFFFF9500,
-      'yellow': 0xFFFFD700, 'green': 0xFF00FF41, 'teal': 0xFF00FFAA,
-      'blue': 0xFF4A9EFF, 'purple': 0xFFAF52DE, 'white': 0xFFFFFFFF,
-      'black': 0xFF000000, 'gray': 0xFF888888, 'grey': 0xFF888888,
-      'cyan': 0xFF00FFFF, 'magenta': 0xFFFF00FF, 'gold': 0xFFFFD700,
+      'pink': 0xFFFF69B4,
+      'red': 0xFFFF0000,
+      'orange': 0xFFFF9500,
+      'yellow': 0xFFFFD700,
+      'green': 0xFF00FF41,
+      'teal': 0xFF00FFAA,
+      'blue': 0xFF4A9EFF,
+      'purple': 0xFFAF52DE,
+      'white': 0xFFFFFFFF,
+      'black': 0xFF24404D,
+      'gray': 0xFF76868D,
+      'grey': 0xFF76868D,
+      'cyan': 0xFF00FFFF,
+      'magenta': 0xFFFF00FF,
+      'gold': 0xFFFFD700,
     };
     final c = named[s.toLowerCase()];
     return c != null ? Color(c) : null;

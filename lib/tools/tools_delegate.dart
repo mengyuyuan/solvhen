@@ -4,6 +4,7 @@
 library;
 
 import 'dart:convert';
+import '../core/security/tool_security.dart';
 import 'tool_registry.dart';
 import '../services/sub_agent.dart';
 
@@ -24,14 +25,12 @@ void registerDelegateTools() {
 单任务: delegate_task({goal:"...", context:"...", toolsets:["web"]})
 批量并行: delegate_task({tasks:[{goal:"...", toolsets:["web"]}, {goal:"..."}]})
 
-toolsets (可选，默认全部):
+toolsets (可选；必须显式列出，省略时为纯文本子任务):
   web: 搜索+网络请求
   file: 文件读写
   system: 系统控制
-  code: 代码执行
   memory: 记忆操作
   history: 历史搜索
-  ui: 界面控制
 
 使用场景:
 - "帮我同时查A和B" → 两个子agent并行搜索
@@ -67,20 +66,29 @@ toolsets (可选，默认全部):
         'required': [],
       },
     },
-    handler: (args) async {
-      final runner = SubAgentRunner();
+    handler: (args) => _runDelegation(args, null),
+    contextualHandler: _runDelegation,
+  ));
+}
 
-      // 批量并行模式：同时执行多个子任务
-      if (args['tasks'] != null) {
-        final taskList = args['tasks'] as List<dynamic>;
-        if (taskList.isEmpty) {
-          return jsonEncode({'error': 'tasks 不能为空'});
-        }
-        if (taskList.length > 3) {
-          return jsonEncode({'error': '最多3个子任务并行'});
-        }
+Future<String> _runDelegation(
+  Map<String, dynamic> args,
+  ToolContext? parentContext,
+) async {
+  final runner = SubAgentRunner();
 
-        final configs = taskList.map((t) {
+  // 批量并行模式：同时执行多个子任务
+  if (args['tasks'] != null) {
+    final taskList = args['tasks'] as List<dynamic>;
+    if (taskList.isEmpty) {
+      return jsonEncode({'error': 'tasks 不能为空'});
+    }
+    if (taskList.length > 3) {
+      return jsonEncode({'error': '最多3个子任务并行'});
+    }
+
+    final configs = taskList
+        .map((t) {
           final m = t as Map<String, dynamic>;
           final goal = m['goal'];
           if (goal == null || goal is! String) {
@@ -91,33 +99,36 @@ toolsets (可选，默认全部):
             context: m['context'] as String?,
             toolsets: (m['toolsets'] as List<dynamic>?)?.cast<String>(),
           );
-        }).whereType<SubAgentConfig>().toList();
+        })
+        .whereType<SubAgentConfig>()
+        .toList();
 
-        if (configs.isEmpty) {
-          return jsonEncode({'error': 'tasks 中每个任务需要提供有效的 goal 字段'});
-        }
+    if (configs.isEmpty) {
+      return jsonEncode({'error': 'tasks 中每个任务需要提供有效的 goal 字段'});
+    }
 
-        final results = await runner.runParallel(configs);
-        return jsonEncode({
-          'results': results.map((r) => r.toJson()).toList(),
-          'parallel': true,
-          'count': results.length,
-        });
-      }
+    final results = await runner.runParallel(
+      configs,
+      parentContext: parentContext,
+    );
+    return jsonEncode({
+      'results': results.map((r) => r.toJson()).toList(),
+      'parallel': true,
+      'count': results.length,
+    });
+  }
 
-      // 单任务模式
-      if (args['goal'] == null) {
-        return jsonEncode({'error': '请提供 goal 或 tasks'});
-      }
+  // 单任务模式
+  if (args['goal'] == null) {
+    return jsonEncode({'error': '请提供 goal 或 tasks'});
+  }
 
-      final config = SubAgentConfig(
-        goal: args['goal'] as String,
-        context: args['context'] as String?,
-        toolsets: (args['toolsets'] as List<dynamic>?)?.cast<String>(),
-      );
+  final config = SubAgentConfig(
+    goal: args['goal'] as String,
+    context: args['context'] as String?,
+    toolsets: (args['toolsets'] as List<dynamic>?)?.cast<String>(),
+  );
 
-      final result = await runner.run(config);
-      return jsonEncode(result.toJson());
-    },
-  ));
+  final result = await runner.run(config, parentContext: parentContext);
+  return jsonEncode(result.toJson());
 }

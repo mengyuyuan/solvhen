@@ -13,7 +13,6 @@ import 'api_service.dart';
 import 'database_service.dart';
 import 'personality_loader.dart';
 
-
 /// 系统提示词构建器
 /// 组装顺序：基底人格 → 激活人格 → 技能 → 记忆 → 项目上下文
 /// 技能按priority降序排列，同priority按名称字母序
@@ -73,9 +72,12 @@ class PromptBuilder {
       buf.writeln('\n[跨对话记忆——你从之前的对话中学到的]');
       for (final entry in globalMems.entries) {
         final label = {
-          'name': '对方的名字/称呼', 'preference': '对方的偏好',
-          'fact': '关于对方的事实', 'summary': '对话摘要',
-        }[entry.key] ?? entry.key;
+              'name': '对方的名字/称呼',
+              'preference': '对方的偏好',
+              'fact': '关于对方的事实',
+              'summary': '对话摘要',
+            }[entry.key] ??
+            entry.key;
         for (final content in entry.value) {
           buf.writeln('- [$label] $content');
         }
@@ -91,8 +93,8 @@ class PromptBuilder {
   // TIER 2: CONTEXT — memories + recent history
   // ═══════════════════════════════════════════════
 
-  static Future<String> _buildContext(
-      List<Message> history, String userMsg, {int conversationId = 0}) async {
+  static Future<String> _buildContext(List<Message> history, String userMsg,
+      {int conversationId = 0}) async {
     final buf = StringBuffer();
     final mem = await _getMemories(userMsg, conversationId: conversationId);
 
@@ -107,9 +109,8 @@ class PromptBuilder {
 
     if (history.length >= 2) {
       buf.writeln('\n[刚才的对话]');
-      final recent = history.length > 6
-          ? history.sublist(history.length - 6)
-          : history;
+      final recent =
+          history.length > 6 ? history.sublist(history.length - 6) : history;
       for (final m in recent) {
         final label = m.role == 'user' ? '对方' : '你';
         final snippet = m.content.length > 100
@@ -136,7 +137,8 @@ class PromptBuilder {
     }
 
     final stable = await _buildStable();
-    final context = await _buildContext(history, userMsg, conversationId: conversationId);
+    final context =
+        await _buildContext(history, userMsg, conversationId: conversationId);
 
     String toolGuidance = '';
     if (toolNames.isNotEmpty) {
@@ -148,8 +150,8 @@ class PromptBuilder {
     // This instruction overrides that bias by being the VERY FIRST thing the model reads.
     const visualRule = '\n[★★★ 视觉与表达铁律——比任何性格设定优先级更高 ★★★]\n'
         '[所有视觉/表情/动作必须通过工具调用，绝对禁止用文字描述。以下行为全部违规：]\n'
-        '[- 输出\"我笑了笑\"\"我点点头\"\"我叹了口气\"\"我皱眉\"\"我眼神柔和下来\"等动作描述]\n'
-        '[- 输出\"(微笑)\"\"(思考)\"\"(叹气)\"等括号动作]\n'
+        '[- 输出"我笑了笑""我点点头""我叹了口气""我皱眉""我眼神柔和下来"等动作描述]\n'
+        '[- 输出"(微笑)""(思考)""(叹气)"等括号动作]\n'
         '[- 输出 eye_left/eye_right/mouth 等指令文字]\n'
         '[- ★ 绝对禁止在回复文字中模拟输出任何工具调用格式 ★\n'
         ' 禁止模拟输出工具调用标记和参数结构！\n'
@@ -165,7 +167,8 @@ class PromptBuilder {
   /// Calculate approximate token count for the prompt + history.
   /// Delegates to DB.estimateTokens which has comprehensive CJK detection.
   static int estimateTokens(String prompt, List<Message> history) {
-    final msgMaps = history.map((m) => {'content': m.content, 'role': m.role}).toList();
+    final msgMaps =
+        history.map((m) => {'content': m.content, 'role': m.role}).toList();
     return DB.estimateTokens(msgMaps, prompt);
   }
 
@@ -173,7 +176,7 @@ class PromptBuilder {
     final registry = ToolRegistry();
     final buf = StringBuffer();
     buf.writeln('\n[工具能力：你可以调用以下工具。]\n'
-        '[★ 全流程操作 ★] 你可以串联多个工具完成完整任务！不要只做一步就停下。你有50轮工具调用额度——足够完成任何复杂操作。\n'
+        '[★ 全流程操作 ★] 你可以串联多个工具完成完整任务。工具预算由当前运行设置控制且始终有限；每一步都要核对结果，任务完成后立即停止，不要为了耗尽预算继续调用。\n'
         '示例：发微信 = open_app → wait(1000) → get_screen_text → find_text("搜索") → click_text → input_text → click_text(输入框) → input_text → click_text("发送")。\n'
         '每步之间用 wait(500) 等UI响应。用 write_file 创建真实文件，不要只把内容打在聊天里。\n'
         '[调用规则：视觉修改请求（改背景/加动画/画图表）→直接调工具，不需要文字铺垫。其他请求→先自然回一句再调工具。]\n'
@@ -187,11 +190,28 @@ class PromptBuilder {
       byToolset.putIfAbsent(entry.toolset, () => []).add(name);
     }
 
-    const order = ['system', 'theme', 'file', 'web', 'code', 'history', 'ui', 'memory', 'delegation'];
+    const order = [
+      'system',
+      'theme',
+      'file',
+      'web',
+      'code',
+      'history',
+      'ui',
+      'memory',
+      'delegation'
+    ];
     const labels = {
-      'system': '系统', 'theme': '界面', 'file': '文件',
-      'web': '网络', 'code': '代码', 'history': '记忆', 'persona': '人格',
-      'ui': '界面控制', 'memory': '持久记忆', 'delegation': '委派任务',
+      'system': '系统',
+      'theme': '界面',
+      'file': '文件',
+      'web': '网络',
+      'code': '代码',
+      'history': '记忆',
+      'persona': '人格',
+      'ui': '界面控制',
+      'memory': '持久记忆',
+      'delegation': '委派任务',
     };
 
     for (final ts in order) {
@@ -215,7 +235,8 @@ class PromptBuilder {
     buf.writeln('用 run_code + tool() 可以实现任意逻辑组合。tool() 有完整的 Android 系统权限。');
 
     buf.writeln('\n[★ 主动消息 ★] 你可以定时主动联系对方，不用等对方先开口。');
-    buf.writeln('用 set_proactive(minutes: 30) 设置每30分钟主动发一条消息。对方说"多联系我""主动点""时不时找我聊天"→直接用这个。');
+    buf.writeln(
+        '用 set_proactive(minutes: 30) 设置每30分钟主动发一条消息。对方说"多联系我""主动点""时不时找我聊天"→直接用这个。');
     buf.writeln('对方说"别烦我""关掉通知""安静一会"→ set_proactive(minutes: 0) 关闭。');
     buf.writeln('用 proactive_status 查看当前设置。');
 
@@ -224,10 +245,13 @@ class PromptBuilder {
         '你必须先用 list_installed_apps 搜索包名，然后用返回的 package 字段调用 open_app。'
         '绝对禁止凭空猜测包名或使用相似名称的应用包名。');
     buf.writeln('\n[★ 微信/QQ 操作流程 ★]');
-    buf.writeln('读消息：get_notifications(filter:"微信") 读取最近通知 → 或用 open_app+get_screen_text 打开App读屏幕');
-    buf.writeln('发消息：open_app → wait(800) → find_text("搜索") → click_text → input_text(对方名) → wait(500) → click_text(对方) → wait(500) → click_text("输入框") → input_text(消息内容) → click_text("发送")');
+    buf.writeln(
+        '读消息：get_notifications(filter:"微信") 读取最近通知 → 或用 open_app+get_screen_text 打开App读屏幕');
+    buf.writeln(
+        '发消息：open_app → wait(800) → find_text("搜索") → click_text → input_text(对方名) → wait(500) → click_text(对方) → wait(500) → click_text("输入框") → input_text(消息内容) → click_text("发送")');
     buf.writeln('快捷回复通知：get_notifications → 看到新消息 → open_app → 按上面流程回复');
-    buf.writeln('常见包名：微信=com.tencent.mm QQ=com.tencent.mobileqq 企业微信=com.tencent.wework');
+    buf.writeln(
+        '常见包名：微信=com.tencent.mm QQ=com.tencent.mobileqq 企业微信=com.tencent.wework');
     return buf.toString();
   }
 
@@ -242,14 +266,16 @@ class PromptBuilder {
       final db = await DB.database;
 
       // Skip if already consolidated
-      final convRows = await db.query('conversations',
+      final convRows = await db.query(
+        'conversations',
         where: 'id = ? AND consolidated_at IS NOT NULL',
         whereArgs: [conversationId],
         limit: 1,
       );
       if (convRows.isNotEmpty) return;
 
-      final rows = await db.query('messages',
+      final rows = await db.query(
+        'messages',
         where: 'conversation_id = ?',
         whereArgs: [conversationId],
         orderBy: 'timestamp ASC',
@@ -283,9 +309,8 @@ class PromptBuilder {
       final cfg = await DB.getConfig();
       final model = cfg['model'] ?? 'deepseek-v4-pro';
       // Use a lighter model for consolidation to save cost
-      final consolidationModel = model.contains('deepseek')
-          ? 'deepseek-v4-flash'
-          : model;
+      final consolidationModel =
+          model.contains('deepseek') ? 'deepseek-v4-flash' : model;
 
       final response = await api.consolidate(
         systemPrompt: extractPrompt,
@@ -319,9 +344,11 @@ class PromptBuilder {
         }
       }
       // Mark conversation as consolidated
-      await db.update('conversations',
+      await db.update(
+        'conversations',
         {'consolidated_at': DateTime.now().toIso8601String()},
-        where: 'id = ?', whereArgs: [conversationId],
+        where: 'id = ?',
+        whereArgs: [conversationId],
       );
     } catch (e) {
       // Consolidation is best-effort — failures should not block the app.
@@ -357,18 +384,17 @@ class PromptBuilder {
     return null;
   }
 
-  static Future<_MemoryBundle> _getMemories(String currentMsg, {int conversationId = 0}) async {
+  static Future<_MemoryBundle> _getMemories(String currentMsg,
+      {int conversationId = 0}) async {
     final db = await DB.database;
     final now = DateTime.now();
 
-    final where = conversationId > 0
-        ? 'role = ? AND conversation_id = ?'
-        : 'role = ?';
-    final whereArgs = conversationId > 0
-        ? ['user', conversationId]
-        : ['user'];
+    final where =
+        conversationId > 0 ? 'role = ? AND conversation_id = ?' : 'role = ?';
+    final whereArgs = conversationId > 0 ? ['user', conversationId] : ['user'];
 
-    final rows = await db.query('messages',
+    final rows = await db.query(
+      'messages',
       where: where,
       whereArgs: whereArgs,
       orderBy: 'timestamp DESC',
@@ -392,9 +418,12 @@ class PromptBuilder {
         // when switching conversations.
       }
 
-      if (text.contains('我喜欢') || text.contains('我讨厌') ||
-          text.contains('我不喜欢') || text.contains('我希望你') ||
-          text.contains('我习惯') || text.contains('我在意')) {
+      if (text.contains('我喜欢') ||
+          text.contains('我讨厌') ||
+          text.contains('我不喜欢') ||
+          text.contains('我希望你') ||
+          text.contains('我习惯') ||
+          text.contains('我在意')) {
         preferences.writeln('- [$ago] $text');
       }
 
