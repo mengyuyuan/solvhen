@@ -23,6 +23,16 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: python -m unittest tool/test_rebuild_server.py
+      - name: Configure ephemeral CI signing
+        shell: bash
+        run: |
+          keytool -genkeypair -noprompt \
+            -keystore android/app/ci-release.jks \
+            -storepass android -keypass android -alias ci \
+            -keyalg RSA -keysize 2048 -validity 1 \
+            -dname "CN=Solvhen CI,O=Solvhen,C=CN"
+          printf 'storePassword=android\nkeyPassword=android\nkeyAlias=ci\nstoreFile=app/ci-release.jks\n' \
+            > android/key.properties
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
