@@ -42,6 +42,27 @@ class WebViewCanvasController {
   /// 都是 true，ValueNotifier 不会通知，WebView 就无法重新挂载和冻结。
   final ValueNotifier<int> revision = ValueNotifier(0);
 
+  /// KaTeX assets for LaTeX rendering on the canvas, loaded from a
+  /// China-friendly CDN. When offline, __solvhenRenderMath retries for ~6s
+  /// and then leaves the raw $ delimiters visible instead of failing silently.
+  static const _katexHead =
+      '<link rel="stylesheet" href="https://cdn.staticfile.org/KaTeX/0.16.9/katex.min.css">'
+      '<script src="https://cdn.staticfile.org/KaTeX/0.16.9/katex.min.js"></script>'
+      '<script src="https://cdn.staticfile.org/KaTeX/0.16.9/contrib/auto-render.min.js"></script>'
+      '<script>window.__solvhenRenderMath=function(el){'
+      'var opts={delimiters:['
+      '{left:"\$\$",right:"\$\$",display:true},'
+      '{left:"\$",right:"\$",display:false},'
+      '{left:"\\\\(",right:"\\\\)",display:false},'
+      '{left:"\\\\[",right:"\\\\]",display:true}'
+      '],throwOnError:false,ignoredTags:["script","noscript","style","textarea","pre","code","option"]};'
+      'if(window.renderMathInElement){try{renderMathInElement(el,opts)}catch(e){}}'
+      'else{var t=0;var iv=setInterval(function(){'
+      'if(window.renderMathInElement){clearInterval(iv);try{renderMathInElement(el,opts)}catch(e){}}'
+      'else if(++t>20){clearInterval(iv);}'
+      '},300);}'
+      '};</script>';
+
   /// The default blank page — transparent canvas.
   static const blankPage = '<!DOCTYPE html><html><head>'
       '<meta charset="utf-8">'
@@ -50,7 +71,7 @@ class WebViewCanvasController {
       '*{margin:0;padding:0;box-sizing:border-box}'
       'html,body{width:100%;height:100%;background:transparent;overflow:hidden}'
       '#c{position:fixed;top:0;left:0;width:100%;height:100%}'
-      '</style>'
+      '</style>$_katexHead'
       '</head><body><div id="c"></div></body></html>';
 
   /// Keep current HTML only for the active app session.
@@ -160,6 +181,7 @@ class WebViewCanvasController {
 (function(){
   var c=document.getElementById('c')||document.body;
   c.innerHTML=`$escaped`;
+  if(window.__solvhenRenderMath){window.__solvhenRenderMath(c);}
 })();
 ''');
       } catch (_) {
@@ -175,6 +197,7 @@ class WebViewCanvasController {
   d.innerHTML=atob("$b64");
   var c=document.getElementById('c')||document.body;
   c.appendChild(d);
+  if(window.__solvhenRenderMath){window.__solvhenRenderMath(c);}
 })();
 ''');
     }
@@ -193,7 +216,7 @@ class WebViewCanvasController {
         '*{margin:0;padding:0;box-sizing:border-box}'
         'html,body{width:100%;height:100%;background:transparent;overflow:hidden}'
         '#c{position:fixed;top:0;left:0;width:100%;height:100%}'
-        '</style>'
+        '</style>$_katexHead'
         '</head><body>$html'
         '</body></html>';
   }
