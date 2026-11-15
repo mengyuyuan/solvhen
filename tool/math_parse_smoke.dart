@@ -1,5 +1,6 @@
 // Smoke test for the math markdown parsing layer (pure Dart, no Flutter).
 // Run: dart run tool/math_parse_smoke.dart
+// ignore_for_file: avoid_print
 import 'package:markdown/markdown.dart' as md;
 
 import 'package:solvhen/screens/markdown_math_syntax.dart';
