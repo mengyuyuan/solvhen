@@ -70,11 +70,32 @@ void main() {
       PolicyDecision.confirm,
     );
   });
+  test('device_act asks for confirmation and rejects empty steps once approved',
+      () async {
+    // 未提供确认回调时，破坏性工具必须在策略层就被拦下，绝不触达设备。
+    final blocked = jsonDecode(await ToolRegistry().dispatch(
+      'device_act',
+      {
+        'steps': <Object>[],
+      },
+    )) as Map<String, dynamic>;
+    expect(blocked['ok'], isNull);
+    expect(blocked['error'], contains('approval'));
 
-  test('device_act rejects an empty step list before touching the device', () async {
-    final output = await ToolRegistry().dispatch('device_act', {'steps': <Object>[]});
-    final decoded = jsonDecode(output) as Map<String, dynamic>;
-    expect(decoded['ok'], isFalse);
-    expect(decoded['error'], contains('steps'));
+    // 用户确认后进入参数校验：空序列不应调用任何设备接口。
+    var asked = false;
+    final approved = jsonDecode(await ToolRegistry().dispatch(
+      'device_act',
+      {
+        'steps': <Object>[],
+      },
+      onApproval: (request) async {
+        asked = true;
+        return true;
+      },
+    )) as Map<String, dynamic>;
+    expect(asked, isTrue);
+    expect(approved['ok'], isFalse);
+    expect(approved['error'], contains('steps'));
   });
 }
