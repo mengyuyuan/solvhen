@@ -216,6 +216,166 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    // ═══ UI 自动化内核 — 结构化读取 / 语义动作 / 原子序列 ═══
+                    "uiDump" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启，请到设置→无障碍→Solvhen中开启"))
+                        } else {
+                            val includeInvisible = call.argument<Boolean>("includeInvisible") ?: false
+                            val maxNodes = (call.argument<Int>("maxNodes") ?: 600).coerceIn(50, 3000)
+                            offload(result) { svc.automator.dump(includeInvisible, maxNodes) }
+                        }
+                    }
+                    "uiFind" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.find(
+                                    text = call.argument<String>("text") ?: "",
+                                    viewId = call.argument<String>("viewId") ?: "",
+                                    className = call.argument<String>("className") ?: "",
+                                    clickableOnly = call.argument<Boolean>("clickableOnly") ?: false,
+                                    editableOnly = call.argument<Boolean>("editableOnly") ?: false,
+                                    scrollableOnly = call.argument<Boolean>("scrollableOnly") ?: false,
+                                    exact = call.argument<Boolean>("exact") ?: false,
+                                    limit = (call.argument<Int>("limit") ?: 20).coerceIn(1, 100)
+                                )
+                            }
+                        }
+                    }
+                    "uiTapNode" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        val id = call.argument<Int>("id")
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else if (id == null) {
+                            result.success(mapOf("ok" to false, "error" to "缺少参数 id"))
+                        } else {
+                            offload(result) { svc.automator.tapNode(id) }
+                        }
+                    }
+                    "uiTapText" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        val text = call.argument<String>("text") ?: ""
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.tapText(text, call.argument<Boolean>("exact") ?: false)
+                            }
+                        }
+                    }
+                    "uiTypeText" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        val text = call.argument<String>("text") ?: ""
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) { svc.automator.typeText(text) }
+                        }
+                    }
+                    "uiSwipe" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        val direction = call.argument<String>("direction") ?: "up"
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.swipe(direction, call.argument<Long>("duration") ?: 300L)
+                            }
+                        }
+                    }
+                    "uiScrollFind" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        val text = call.argument<String>("text") ?: ""
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.scrollUntilFound(
+                                    text,
+                                    (call.argument<Int>("maxScrolls") ?: 6).coerceIn(1, 30)
+                                )
+                            }
+                        }
+                    }
+                    "uiWaitText" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        val text = call.argument<String>("text") ?: ""
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.waitForText(
+                                    text,
+                                    (call.argument<Long>("timeoutMs") ?: 5000L).coerceIn(300L, 30000L)
+                                )
+                            }
+                        }
+                    }
+                    "uiWaitIdle" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.waitForIdle(
+                                    (call.argument<Long>("timeoutMs") ?: 4000L).coerceIn(300L, 15000L)
+                                )
+                            }
+                        }
+                    }
+                    "uiForeground" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) { svc.automator.foreground() }
+                        }
+                    }
+                    "uiDismiss" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            offload(result) {
+                                svc.automator.dismiss(
+                                    allowPermissions = call.argument<Boolean>("allowPermissions") ?: false,
+                                    maxClicks = (call.argument<Int>("maxClicks") ?: 2).coerceIn(1, 5)
+                                )
+                            }
+                        }
+                    }
+                    "uiSequence" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            val raw = call.argument<List<Map<String, Any>>>("steps") ?: emptyList()
+                            offload(result) { svc.automator.sequence(raw) }
+                        }
+                    }
+                    "screenshot" -> {
+                        val svc = SolvhenAccessibilityService.instance
+                        if (svc == null) {
+                            result.success(mapOf("error" to "无障碍服务未开启"))
+                        } else {
+                            val quality = (call.argument<Int>("quality") ?: 70).coerceIn(20, 95)
+                            val maxWidth = (call.argument<Int>("maxWidth") ?: 900).coerceIn(320, 1440)
+                            svc.screenshotBase64(quality, maxWidth) { encoded ->
+                                runOnUiThread {
+                                    if (encoded == null) {
+                                        result.success(mapOf("error" to "截图失败：需要 Android 11+ 且无障碍服务已开启截图能力"))
+                                    } else {
+                                        result.success(mapOf("format" to "jpeg", "base64" to encoded))
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // ═══ 通知监听 ═══
                     "getNotifications" -> {
                         val filter = call.argument<String>("filter") ?: ""
@@ -244,6 +404,18 @@ class MainActivity : FlutterActivity() {
                 result.error("SYSTEM_ERROR", e.message, null)
             }
         }
+    }
+
+    /** 把可能阻塞的 UI 操作放到工作线程，结果回到平台线程返回。 */
+    private fun offload(result: MethodChannel.Result, block: () -> Any?) {
+        Thread {
+            try {
+                val value = block()
+                runOnUiThread { result.success(value) }
+            } catch (t: Throwable) {
+                runOnUiThread { result.error("solvhen_ui", t.message ?: t.javaClass.simpleName, null) }
+            }
+        }.start()
     }
 
     private fun getBattery(): Map<String, Any> {

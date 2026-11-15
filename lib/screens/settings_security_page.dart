@@ -32,6 +32,7 @@ class _SettingsSecurityPageState extends ConsumerState<SettingsSecurityPage> {
 
   static const _capabilityOrder = [
     'system',
+    'device',
     'file',
     'web',
     'memory',
@@ -48,6 +49,11 @@ class _SettingsSecurityPageState extends ConsumerState<SettingsSecurityPage> {
       '设备与系统',
       '设备状态、应用控制、模型切换与主动任务',
       Icons.phone_android_rounded,
+    ),
+    'device': _CapabilitySpec(
+      '屏幕操控',
+      '读取界面结构、点击输入滑动与整屏截图',
+      Icons.touch_app_outlined,
     ),
     'file': _CapabilitySpec(
       '本地文件',

@@ -39,6 +39,7 @@ import 'tools/tools_ui.dart';
 import 'tools/tools_delegate.dart';
 import 'tools/tools_model.dart';
 import 'tools/tools_proactive.dart';
+import 'tools/tools_device.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,6 +52,7 @@ Future<void> main() async {
   final regFns = [
     registerThemeTools,
     registerSystemTools,
+    registerDeviceTools,
     registerFileTools,
     registerCodeTool,
     registerWebTools,

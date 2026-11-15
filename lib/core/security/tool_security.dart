@@ -190,6 +190,7 @@ class ToolPolicyEngine {
     'press_enter',
     'press_recent',
     'long_press',
+    'device_act',
     'rebuild_self',
     'register_tool',
     'unregister_tool',
@@ -222,6 +223,17 @@ ToolRisk inferToolRisk(String name, String toolset) {
     return ToolRisk.destructive;
   }
   if (toolset == 'dynamic') return ToolRisk.destructive;
+  // device_* 兜底：只有明确只读的才放行自动执行，其余按修改处理。
+  if (toolset == 'device') {
+    const readOnly = {
+      'device_screen',
+      'device_find',
+      'device_wait',
+      'device_app',
+      'device_shot',
+    };
+    return readOnly.contains(name) ? ToolRisk.read : ToolRisk.modify;
+  }
   if (const {
     'write_file',
     'save_memory',

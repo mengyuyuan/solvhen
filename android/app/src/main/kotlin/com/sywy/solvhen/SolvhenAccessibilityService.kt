@@ -22,6 +22,16 @@ class SolvhenAccessibilityService : AccessibilityService() {
     companion object {
         var instance: SolvhenAccessibilityService? = null
             private set
+
+        /** 最近前台包名，供 Agent 判断当前所在应用 */
+        @Volatile
+        var lastPackage: String = ""
+            private set
+
+        internal fun rememberPackage(pkg: String?) {
+            val value = pkg?.trim().orEmpty()
+            if (value.isNotEmpty()) lastPackage = value
+        }
         
         /** 检查无障碍服务是否已开启 */
         fun isEnabled(context: android.content.Context): Boolean {
@@ -33,12 +43,24 @@ class SolvhenAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** UI 自动化内核：结构化读取 + 语义动作 + 原子序列 */
+    val automator: SolvhenUiAutomator by lazy { SolvhenUiAutomator(this) }
+
+    /** 最近一次无障碍事件的包名 */
+    @Volatile
+    var lastEventPackage: String = ""
+        private set
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val pkg = event?.packageName?.toString()?.trim().orEmpty()
+        if (pkg.isNotEmpty()) lastEventPackage = pkg
+        rememberPackage(pkg)
+    }
 
     override fun onInterrupt() {}
 
@@ -184,6 +206,51 @@ class SolvhenAccessibilityService : AccessibilityService() {
             }
         }
         callback(false)
+    }
+
+    // ═══════════════════════════════════════════
+    // 截图 — 让视觉模型也能「看」屏幕
+    // ═══════════════════════════════════════════
+
+    /** 截取当前屏幕并返回 Base64 JPEG。需要 Android 11(API 30)+ 且清单声明 canTakeScreenshot。 */
+    fun screenshotBase64(quality: Int = 70, maxWidth: Int = 900, callback: (String?) -> Unit) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            callback(null)
+            return
+        }
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    val buffer = screenshot.hardwareBuffer
+                    try {
+                        val bitmap = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
+                        if (bitmap == null) {
+                            callback(null)
+                            return
+                        }
+                        val out = ByteArrayOutputStream()
+                        scaleDown(bitmap, maxWidth).compress(Bitmap.CompressFormat.JPEG, quality, out)
+                        callback(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP))
+                    } catch (t: Throwable) {
+                        callback(null)
+                    } finally {
+                        try { buffer?.close() } catch (_: Throwable) {}
+                    }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    callback(null)
+                }
+            })
+        } catch (t: Throwable) {
+            callback(null)
+        }
+    }
+
+    private fun scaleDown(source: Bitmap, maxWidth: Int): Bitmap {
+        if (source.width <= maxWidth) return source
+        val ratio = maxWidth.toFloat() / source.width
+        return Bitmap.createScaledBitmap(source, maxWidth, (source.height * ratio).toInt(), true)
     }
 
     // ═══════════════════════════════════════════

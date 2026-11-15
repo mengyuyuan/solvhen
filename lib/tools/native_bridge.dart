@@ -109,6 +109,94 @@ class NativeBridge {
       _invoke('clickText', {'text': text});
 
   // ═══════════════════════════════════════
+  // UI 自动化内核 — 结构化读取 + 语义动作 + 原子序列
+  // 与 SolvhenUiAutomator.kt 一一对应
+  // ═══════════════════════════════════════
+
+  /// 读取结构化 UI 树（节点带稳定 id，供 uiTapNode 精准点击）
+  static Future<Map<String, dynamic>> uiDump({
+    bool includeInvisible = false,
+    int maxNodes = 600,
+  }) => _invoke('uiDump', {
+    'includeInvisible': includeInvisible,
+    'maxNodes': maxNodes,
+  });
+
+  /// 多条件查找节点
+  static Future<Map<String, dynamic>> uiFind({
+    String text = '',
+    String viewId = '',
+    String className = '',
+    bool clickableOnly = false,
+    bool editableOnly = false,
+    bool scrollableOnly = false,
+    bool exact = false,
+    int limit = 20,
+  }) => _invoke('uiFind', {
+    'text': text,
+    'viewId': viewId,
+    'className': className,
+    'clickableOnly': clickableOnly,
+    'editableOnly': editableOnly,
+    'scrollableOnly': scrollableOnly,
+    'exact': exact,
+    'limit': limit,
+  });
+
+  /// 按 dump 得到的节点 id 点击
+  static Future<Map<String, dynamic>> uiTapNode(int id) =>
+      _invoke('uiTapNode', {'id': id});
+
+  /// 查找并点击文字
+  static Future<Map<String, dynamic>> uiTapText(String text, {bool exact = false}) =>
+      _invoke('uiTapText', {'text': text, 'exact': exact});
+
+  /// 向焦点输入框写入文字
+  static Future<Map<String, dynamic>> uiTypeText(String text) =>
+      _invoke('uiTypeText', {'text': text});
+
+  /// 方向滑动：up / down / left / right
+  static Future<Map<String, dynamic>> uiSwipe(String direction, {int duration = 300}) =>
+      _invoke('uiSwipe', {'direction': direction, 'duration': duration});
+
+  /// 滚动查找直到目标出现
+  static Future<Map<String, dynamic>> uiScrollFind(String text, {int maxScrolls = 6}) =>
+      _invoke('uiScrollFind', {'text': text, 'maxScrolls': maxScrolls});
+
+  /// 等待文字出现
+  static Future<Map<String, dynamic>> uiWaitText(String text, {int timeoutMs = 5000}) =>
+      _invoke('uiWaitText', {'text': text, 'timeoutMs': timeoutMs});
+
+  /// 等待界面稳定
+  static Future<Map<String, dynamic>> uiWaitIdle({int timeoutMs = 4000}) =>
+      _invoke('uiWaitIdle', {'timeoutMs': timeoutMs});
+
+  /// 当前前台应用
+  static Future<Map<String, dynamic>> uiForeground() => _invoke('uiForeground');
+
+  /// 关闭挡路弹窗（allowPermissions=false 时不点「允许」）
+  static Future<Map<String, dynamic>> uiDismiss({
+    bool allowPermissions = false,
+    int maxClicks = 2,
+  }) => _invoke('uiDismiss', {
+    'allowPermissions': allowPermissions,
+    'maxClicks': maxClicks,
+  });
+
+  /// 原子序列：一次确认执行多步
+  static Future<Map<String, dynamic>> uiSequence(List<Map<String, dynamic>> steps) =>
+      _invoke('uiSequence', {'steps': steps});
+
+  /// 截屏，返回 Base64 JPEG
+  static Future<Map<String, dynamic>> screenshot({
+    int quality = 70,
+    int maxWidth = 900,
+  }) => _invoke('screenshot', {
+    'quality': quality,
+    'maxWidth': maxWidth,
+  });
+
+  // ═══════════════════════════════════════
   // 通知监听 — 读取微信/QQ等App的通知
   // ═══════════════════════════════════════
 
