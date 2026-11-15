@@ -277,7 +277,7 @@ class SolvhenUiAutomator(private val service: SolvhenAccessibilityService) {
 
     fun foreground(): Map<String, Any> {
         val root = service.rootInActiveWindow
-        val pkg = root?.packageName?.toString().orEmpty().ifEmpty { service.lastPackage }
+        val pkg = root?.packageName?.toString().orEmpty().ifEmpty { SolvhenAccessibilityService.lastPackage }
         return linkedMapOf(
             "package" to pkg,
             "app" to appLabel(pkg),
